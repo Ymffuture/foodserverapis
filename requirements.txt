@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+python-dotenv
+pydantic
+sqlalchemy
+requests
+cloudinary
+cloudinary[uploader]
+python-multipart
+passlib[bcrypt]
