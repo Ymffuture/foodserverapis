@@ -1,13 +1,17 @@
 from pydantic import BaseModel
+from typing import Optional
 
-class MenuCreate(BaseModel):
+class MenuItemBase(BaseModel):
     name: str
+    description: Optional[str] = None
     price: float
-    description: str
+    category: str
 
-class MenuResponse(MenuCreate):
+class MenuItemCreate(MenuItemBase):
+    pass
+
+class MenuItemResponse(MenuItemBase):
     id: int
-    image: str | None
-
+    image_url: Optional[str] = None
     class Config:
         from_attributes = True
