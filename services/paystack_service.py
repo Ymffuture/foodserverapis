@@ -1,38 +1,21 @@
+
 import requests
-from ..config import PAYSTACK_SECRET
+from config import PAYSTACK_SECRET_KEY
 
-BASE = "https://api.paystack.co"
+HEADERS = {"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}"}
 
-def initialize_payment(email, amount):
-
-    headers = {
-        "Authorization": f"Bearer {PAYSTACK_SECRET}",
-        "Content-Type": "application/json",
-    }
-
-    payload = {
+def initialize_payment(email: str, amount: int, reference: str):
+    url = "https://api.paystack.co/transaction/initialize"
+    data = {
         "email": email,
-        "amount": int(amount * 100)
+        "amount": amount * 100,  # Paystack uses kobo
+        "reference": reference,
+        "currency": "ZAR"
     }
+    response = requests.post(url, json=data, headers=HEADERS)
+    return response.json()
 
-    r = requests.post(
-        f"{BASE}/transaction/initialize",
-        json=payload,
-        headers=headers
-    )
-
-    return r.json()
-
-
-def verify_payment(reference):
-
-    headers = {
-        "Authorization": f"Bearer {PAYSTACK_SECRET}",
-    }
-
-    r = requests.get(
-        f"{BASE}/transaction/verify/{reference}",
-        headers=headers
-    )
-
-    return r.json()
+def verify_payment(reference: str):
+    url = f"https://api.paystack.co/transaction/verify/{reference}"
+    response = requests.get(url, headers=HEADERS)
+    return response.json()
