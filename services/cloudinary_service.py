@@ -1,6 +1,6 @@
 import cloudinary
 import cloudinary.uploader
-from ..config import *
+from config import CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET
 
 cloudinary.config(
     cloud_name=CLOUDINARY_CLOUD_NAME,
@@ -9,5 +9,5 @@ cloudinary.config(
 )
 
 def upload_image(file):
-    result = cloudinary.uploader.upload(file)
-    return result["secure_url"]
+    result = cloudinary.uploader.upload(file.file)
+    return result.get("secure_url")
