@@ -1,36 +1,36 @@
-from fastapi import APIRouter, Depends, UploadFile, File
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from sqlalchemy.orm import Session
-from ..dependencies import get_db
-from ..models.menu import Menu
-from ..services.cloudinary_service import upload_image
+from database import get_db
+from models.menu import MenuItem
+from schemas.menu_schema import MenuItemCreate, MenuItemResponse
+from services.cloudinary_service import upload_image
+from typing import List
 
-router = APIRouter(prefix="/menu")
+router = APIRouter()
 
-@router.get("/")
+@router.get("/", response_model=List[MenuItemResponse])
 def get_menu(db: Session = Depends(get_db)):
-    return db.query(Menu).all()
+    return db.query(MenuItem).all()
 
-
-@router.post("/")
-def create_menu(
+@router.post("/", response_model=MenuItemResponse)
+def create_menu_item(
     name: str,
     price: float,
-    description: str,
-    image: UploadFile = File(...),
+    category: str,
+    description: str = None,
+    file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
-
-    image_url = upload_image(image.file)
-
-    item = Menu(
+    image_url = upload_image(file)
+    
+    menu_item = MenuItem(
         name=name,
         price=price,
+        category=category,
         description=description,
-        image=image_url
+        image_url=image_url
     )
-
-    db.add(item)
+    db.add(menu_item)
     db.commit()
-    db.refresh(item)
-
-    return item
+    db.refresh(menu_item)
+    return menu_item
