@@ -1,24 +1,32 @@
+# main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+from database import init_db
 
-from database import Base, engine
-from routes import auth, menu, orders, payments
-
-Base.metadata.create_all(bind=engine)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()          # Initialize MongoDB + Beanie on startup
+    yield
+    # Optional: cleanup on shutdown
+    # await client.close()
 
 app = FastAPI(
     title="KotaBites API",
-    description="Online Kota Ordering System - South Africa",
-    version="1.0.0"
+    description="Online Kota Ordering System - MongoDB",
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # Change to your Vercel domain in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+from routes import auth, menu, orders, payments
 
 app.include_router(auth.router,     prefix="/auth",     tags=["Auth"])
 app.include_router(menu.router,     prefix="/menu",     tags=["Menu"])
@@ -27,4 +35,4 @@ app.include_router(payments.router, prefix="/payments", tags=["Payments"])
 
 @app.get("/")
 def home():
-    return {"message": "KotaBites Backend is Live! 🍔"}
+    return {"message": "KotaBites Backend is Live with MongoDB! 🍔"}
