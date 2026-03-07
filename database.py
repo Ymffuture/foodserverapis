@@ -1,19 +1,22 @@
 # database.py
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+from motor.motor_asyncio import AsyncIOMotorClient
+from beanie import init_beanie
 from config import DATABASE_URL
+import asyncio
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
-)
+client = None
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+async def init_db():
+    global client
+    client = AsyncIOMotorClient(DATABASE_URL)
+    database = client.get_default_database()   # or client["kotabites"]
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+    await init_beanie(
+        database=database,
+        document_models=[
+            "models.user.User",
+            "models.menu.MenuItem",
+            "models.order.Order",
+        ]
+    )
+    print("✅ Connected to MongoDB + Beanie initialized")
