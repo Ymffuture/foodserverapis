@@ -1,14 +1,15 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey
-from sqlalchemy.orm import relationship
-from database import Base
+from beanie import Document, Link
+from pydantic import Field
+from datetime import datetime
+from utils.enums import OrderStatus
 
-class Order(Base):
-    __tablename__ = "orders"
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"))
-    total_amount = Column(Float, nullable=False)
-    status = Column(String, default="pending")  # pending, paid, preparing, delivered
-    payment_reference = Column(String, unique=True)
-    created_at = Column(String)
+class Order(Document):
+    user_id: str
+    total_amount: float
+    status: OrderStatus = OrderStatus.PENDING
+    payment_reference: str = None
+    delivery_address: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
-    user = relationship("User")
+    class Settings:
+        name = "orders"
