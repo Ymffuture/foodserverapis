@@ -4,18 +4,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from database import init_db
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db()          # Initialize MongoDB + Beanie on startup
+    await init_db()
     yield
-    # Optional: cleanup on shutdown
-    # await client.close()
+
 
 app = FastAPI(
     title="KotaBites API",
-    description="Online Kota Ordering System - MongoDB",
+    description="Online Kota Ordering System",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -33,6 +33,7 @@ app.include_router(menu.router,     prefix="/menu",     tags=["Menu"])
 app.include_router(orders.router,   prefix="/orders",   tags=["Orders"])
 app.include_router(payments.router, prefix="/payments", tags=["Payments"])
 
+
 @app.get("/")
 def home():
-    return {"message": "KotaBites Backend is Live with MongoDB! 🍔"}
+    return {"message": "KotaBites API is live 🍔"}
