@@ -8,7 +8,9 @@ client = None
 async def init_db():
     global client
     client = AsyncIOMotorClient(DATABASE_URL)
-    database = client.get_default_database()
+
+    # Explicit DB name — works whether or not the URI includes one
+    database = client["kotabites"]
 
     await init_beanie(
         database=database,
