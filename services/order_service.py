@@ -1,27 +1,42 @@
-from sqlalchemy.orm import Session
-from models.order import Order
+# services/order_service.py
+from models.order import Order, OrderItem
 from models.menu import MenuItem
 from schemas.order_schema import OrderCreate
 from utils.enums import OrderStatus
+from fastapi import HTTPException
 from datetime import datetime
 
-def create_order(db: Session, order_data: OrderCreate, user_id: int):
-    total = 0.0
-    for item in order_data.items:
-        menu_item = db.query(MenuItem).filter(MenuItem.id == item.menu_item_id).first()
-        if not menu_item:
-            raise ValueError(f"Menu item {item.menu_item_id} not found")
-        total += menu_item.price * item.quantity
 
-    new_order = Order(
+async def create_order(order_data: OrderCreate, user_id: str) -> Order:
+    items = []
+    total = 0.0
+
+    for item_input in order_data.items:
+        menu_item = await MenuItem.get(item_input.menu_item_id)
+        if not menu_item:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Menu item '{item_input.menu_item_id}' not found",
+            )
+        subtotal = menu_item.price * item_input.quantity
+        total += subtotal
+        items.append(
+            OrderItem(
+                menu_item_id=str(menu_item.id),
+                name=menu_item.name,
+                price=menu_item.price,
+                quantity=item_input.quantity,
+            )
+        )
+
+    order = Order(
         user_id=user_id,
-        total_amount=total,
+        items=items,
+        total_amount=round(total, 2),
         status=OrderStatus.PENDING,
-        payment_reference=None,
-        created_at=datetime.utcnow().isoformat(),
-        delivery_address=order_data.delivery_address
+        delivery_address=order_data.delivery_address,
+        phone=order_data.phone,
+        created_at=datetime.utcnow(),
     )
-    db.add(new_order)
-    db.commit()
-    db.refresh(new_order)
-    return new_order
+    await order.insert()
+    return order
