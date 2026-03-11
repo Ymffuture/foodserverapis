@@ -1,23 +1,34 @@
+# schemas/order_schema.py
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 
-class OrderItem(BaseModel):
-    menu_item_id: int
+
+class OrderItemInput(BaseModel):
+    menu_item_id: str
     quantity: int
 
+
 class OrderCreate(BaseModel):
-    items: List[OrderItem]
+    items: List[OrderItemInput]
     delivery_address: str
     phone: str
 
+
+class OrderItemResponse(BaseModel):
+    menu_item_id: str
+    name: str
+    price: float
+    quantity: int
+
+
 class OrderResponse(BaseModel):
-    id: int
+    id: Optional[str] = None
     total_amount: float
     status: str
-    payment_reference: Optional[str]
-    created_at: str
+    payment_reference: Optional[str] = None
+    created_at: datetime
     delivery_address: str
+    items: List[OrderItemResponse] = []
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}

@@ -1,5 +1,7 @@
+# schemas/menu_schema.py
 from pydantic import BaseModel
 from typing import Optional
+
 
 class MenuItemBase(BaseModel):
     name: str
@@ -7,11 +9,13 @@ class MenuItemBase(BaseModel):
     price: float
     category: str
 
+
 class MenuItemCreate(MenuItemBase):
     pass
 
+
 class MenuItemResponse(MenuItemBase):
-    id: int
+    id: Optional[str] = None
     image_url: Optional[str] = None
-    class Config:
-        from_attributes = True
+
+    model_config = {"from_attributes": True}
