@@ -1,6 +1,5 @@
-from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
-from database import get_db
+# routes/orders.py
+from fastapi import APIRouter, Depends, HTTPException
 from models.order import Order
 from schemas.order_schema import OrderCreate, OrderResponse
 from services.order_service import create_order
@@ -10,14 +9,26 @@ from typing import List
 
 router = APIRouter()
 
-@router.post("/", response_model=OrderResponse)
-def create_new_order(order: OrderCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    try:
-        new_order = create_order(db, order, current_user.id)
-        return new_order
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+
+@router.post("/", response_model=OrderResponse, status_code=201)
+async def create_new_order(
+    order: OrderCreate,
+    current_user: User = Depends(get_current_user),
+):
+    return await create_order(order, str(current_user.id))
+
 
 @router.get("/me", response_model=List[OrderResponse])
-def get_my_orders(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return db.query(Order).filter(Order.user_id == current_user.id).all()
+async def get_my_orders(current_user: User = Depends(get_current_user)):
+    return await Order.find(Order.user_id == str(current_user.id)).to_list()
+
+
+@router.get("/{order_id}", response_model=OrderResponse)
+async def get_order(
+    order_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    order = await Order.get(order_id)
+    if not order or order.user_id != str(current_user.id):
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
