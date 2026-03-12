@@ -20,7 +20,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+    "https://foodsorder.vercel.app",      # customer frontend
+    "https://adminfoods.vercel.app",      # admin frontend
+], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
