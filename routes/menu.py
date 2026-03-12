@@ -1,7 +1,5 @@
 # routes/menu.py
-# FIX Bug 1: Removed duplicate prefix="/menu" — main.py already sets prefix="/menu"
-# Double-prefix caused all routes to resolve at /menu/menu/... (404 on every call)
-from fastapi import APIRouter, UploadFile, File, HTTPException, status, Depends
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Depends
 from typing import List, Optional
 from bson import ObjectId
 from pydantic import ValidationError
@@ -15,7 +13,6 @@ import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# FIX: no prefix here — main.py owns prefix="/menu"
 router = APIRouter(tags=["Menu"])
 
 
@@ -24,7 +21,6 @@ async def get_menu():
     try:
         items = await MenuItem.find_all().to_list(length=1000)
         logger.info(f"Retrieved {len(items)} menu items")
-        # FIX Bug 5: serialize id from Beanie ObjectId → str
         return [MenuItemResponse(
             id=str(item.id),
             name=item.name,
@@ -55,7 +51,6 @@ async def get_menu_item(item_id: str):
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Menu item not found"
             )
-        # FIX Bug 5: serialize id
         return MenuItemResponse(
             id=str(item.id),
             name=item.name,
@@ -76,12 +71,16 @@ async def get_menu_item(item_id: str):
 
 @router.post("/", response_model=MenuItemResponse, status_code=201)
 async def create_menu_item(
-    name: str,
-    price: float,
-    category: str,
-    description: Optional[str] = None,
+    # ✅ FIX: Declare all text fields with Form(...) so FastAPI reads them
+    # from the multipart/form-data body instead of query parameters.
+    # Without Form(...), FastAPI treats them as query params and they
+    # never arrive → 422 Unprocessable Entity every time.
+    name: str = Form(...),
+    price: float = Form(...),
+    category: str = Form(...),
+    description: Optional[str] = Form(None),
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
     if price <= 0:
         raise HTTPException(
@@ -100,7 +99,6 @@ async def create_menu_item(
         )
 
     try:
-        # FIX Bug 3: upload_image is now async (see services/cloudinary_service.py)
         image_url = await upload_image(file)
 
         menu_item = MenuItem(
@@ -113,7 +111,6 @@ async def create_menu_item(
         await menu_item.insert()
         logger.info(f"Menu item created: {menu_item.id} - {menu_item.name}")
 
-        # FIX Bug 5: serialize id
         return MenuItemResponse(
             id=str(menu_item.id),
             name=menu_item.name,
