@@ -21,12 +21,18 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-    "https://foodsorder.vercel.app",      # customer frontend
-    "https://adminfoods.vercel.app",      # admin frontend
-], 
+        "https://foodsorder.vercel.app",
+        "https://adminfoods.vercel.app",
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["Content-Type", "Authorization", "Accept", "Origin",
+                   "X-Requested-With", "Access-Control-Request-Method",
+                   "Access-Control-Request-Headers"],
 )
 
 from routes import auth, menu, orders, payments
@@ -39,4 +45,4 @@ app.include_router(payments.router, prefix="/payments", tags=["Payments"])
 
 @app.get("/")
 def home():
-    return {"message": "KotaBites API is live 🍔"}
+    return {"message": "KotaBites API is live"}
