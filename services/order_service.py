@@ -34,6 +34,7 @@ async def create_order(order_data: OrderCreate, user_id: str) -> Order:
         items=items,
         total_amount=round(total, 2),
         status=OrderStatus.PENDING,
+        payment_method=order_data.payment_method or "paystack",
         delivery_address=order_data.delivery_address,
         phone=order_data.phone,
         created_at=datetime.utcnow(),
