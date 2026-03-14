@@ -18,17 +18,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# ✅ FIX: Auth is done via Authorization: Bearer token in headers, NOT cookies.
+# Therefore allow_credentials MUST be False and allow_origins can be ["*"].
+#
+# Old config had allow_credentials=True with specific origins. This is only needed
+# when using cookie-based auth. With Bearer tokens we don't need credentials mode,
+# so wildcard origins work fine and won't cause CORS preflight failures.
+#
+# This also fixes local development (localhost:5173 was being blocked).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://foodsorder.vercel.app",
-        "https://adminfoods.vercel.app",
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["Content-Type", "Authorization", "Accept", "Origin",
-                   "X-Requested-With", "Access-Control-Request-Method",
-                   "Access-Control-Request-Headers"],
+    allow_headers=["*"],
 )
 
 from routes import auth, menu, orders, payments
@@ -41,4 +44,4 @@ app.include_router(payments.router, prefix="/payments", tags=["Payments"])
 
 @app.get("/")
 def home():
-    return {"message": "KotaBites API is live"}
+    return {"message": "KotaBites API is live 🔥"}
