@@ -20,6 +20,9 @@ async def create_order(order_data: OrderCreate, user_id: str) -> Order:
             )
         subtotal = menu_item.price * item_input.quantity
         total += subtotal
+
+        # ✅ OrderItem is now a plain Pydantic BaseModel — no insert() needed.
+        # It gets embedded directly as a subdocument inside the Order.
         items.append(
             OrderItem(
                 menu_item_id=str(menu_item.id),
