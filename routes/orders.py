@@ -100,14 +100,61 @@ async def update_order_status(
     return _serialize(order)
 
 
-# ── Single order (customer) — keep LAST so /all and /status are not shadowed ─
+# ── Search by short ID (last 8 chars shown in the UI) ─────────────────────
+# ✅ FIX: The UI shows order.id.slice(-8).toUpperCase() as the "Order ID" label.
+# Users copy this short code and paste it into the Home page track form,
+# which then navigates to /order/<short_id> → 404 because Beanie.get() needs
+# the full 24-char MongoDB ObjectId.
+# This endpoint searches all orders whose string id ends with the given suffix
+# (case-insensitive) so both the full id AND the 8-char short code work.
+@router.get("/search", response_model=OrderResponse)
+async def search_order_by_short_id(
+    short_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Find an order by its full id OR by the last N characters of its id."""
+    short = short_id.strip().lower()
+    if not short:
+        raise HTTPException(status_code=400, detail="short_id is required")
+
+    # Try as full id first (fast path)
+    from bson import ObjectId
+    if len(short) == 24:
+        try:
+            order = await Order.get(short)
+            if order and order.user_id == str(current_user.id):
+                return _serialize(order)
+        except Exception:
+            pass
+
+    # Fallback: scan the user's orders for a suffix match
+    orders = await Order.find(Order.user_id == str(current_user.id)).to_list()
+    for o in orders:
+        if str(o.id).lower().endswith(short):
+            return _serialize(o)
+
+    raise HTTPException(status_code=404, detail="Order not found")
+
+
+# ── Single order (customer) — keep LAST so named routes are not shadowed ────
 
 @router.get("/{order_id}", response_model=OrderResponse)
 async def get_order(
     order_id: str,
     current_user: User = Depends(get_current_user),
 ):
-    order = await Order.get(order_id)
+    # ✅ FIX: also handle short ids here so /order/<short> from the URL bar works
+    order = await Order.get(order_id) if len(order_id) == 24 else None
+
+    if order is None:
+        # Try suffix search
+        short = order_id.strip().lower()
+        orders = await Order.find(Order.user_id == str(current_user.id)).to_list()
+        for o in orders:
+            if str(o.id).lower().endswith(short):
+                order = o
+                break
+
     if not order or order.user_id != str(current_user.id):
         raise HTTPException(status_code=404, detail="Order not found")
     return _serialize(order)
