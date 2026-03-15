@@ -8,7 +8,9 @@ from typing import AsyncGenerator, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from anthropic import AsyncAnthropic, APIError, RateLimitError, AnthropicError
+
+from google import genai
+from google.genai import types
 
 from dependencies import get_current_user
 from models.user import User
@@ -21,13 +23,13 @@ router = APIRouter(prefix="/ai", tags=["AI Assistant"])
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# ── Client ────────────────────────────────────────────────────────────────
+# ── Gemini Client ─────────────────────────────────────────────────────────
 
-anthropic_client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-# Current best models (as of March 2026)
-SONNET_MODEL = "claude-3-5-sonnet-20241022"
-HAIKU_MODEL  = "claude-3-haiku-20240307"
+# Choose model (gemini-1.5-flash is fast & cheap, gemini-1.5-pro is stronger)
+MODEL = "gemini-1.5-flash"          # ← change to "gemini-1.5-pro" if you want better quality
+
 
 # ── Schemas ────────────────────────────────────────────────────────────────
 
@@ -46,7 +48,7 @@ class SuggestionRequest(BaseModel):
     category: Optional[str] = Field(default="general", max_length=50)
 
 
-# ── System Prompt ─────────────────────────────────────────────────────────
+# ── System Prompt Builder ─────────────────────────────────────────────────
 
 async def build_system_prompt(user: User, order_id: Optional[str] = None) -> str:
     # Menu (limited to avoid huge context)
@@ -57,11 +59,10 @@ async def build_system_prompt(user: User, order_id: Optional[str] = None) -> str
             + (f": {i.description[:100]}" if i.description else "")
             for i in items
         ) or "(Menu currently empty)"
-    except Exception as e:
-        logger.warning(f"Failed to load menu for prompt: {e}")
+    except Exception:
         menu_text = "(Menu unavailable right now)"
 
-    # Active order context (only if valid)
+    # Active order context
     order_block = ""
     if order_id:
         try:
@@ -76,7 +77,7 @@ Items: {items_str}
 Address: {order.delivery_address or "Not specified"}
 """
         except Exception:
-            order_block = "\n(Note: Order details could not be loaded — please paste the order ID if needed.)"
+            pass
 
     return f"""You are KotaBot 🍔🤖 — the friendly AI helper for KotaBites, Johannesburg's favourite kota delivery service.
 
@@ -115,24 +116,32 @@ Rules:
 
 @router.post("/chat")
 async def ai_chat(req: ChatRequest, current_user: User = Depends(get_current_user)):
-    """Non-streaming chat with KotaBot"""
-    if not anthropic_client.api_key:
+    """Non-streaming chat with KotaBot (Gemini)"""
+    if not os.getenv("GEMINI_API_KEY"):
         raise HTTPException(503, "AI service not configured")
 
     system_prompt = await build_system_prompt(current_user, req.order_id)
 
     try:
-        response = await anthropic_client.messages.create(
-            model=SONNET_MODEL,
-            max_tokens=600,
-            temperature=0.7,
-            system=system_prompt,
-            messages=[{"role": m.role, "content": m.content} for m in req.messages],
+        # Convert messages to Gemini format
+        gemini_messages = []
+        for msg in req.messages:
+            role = "user" if msg.role == "user" else "model"
+            gemini_messages.append({"role": role, "parts": [msg.content]})
+
+        response = genai.GenerativeModel(MODEL).generate_content(
+            contents=gemini_messages,
+            generation_config=types.GenerationConfig(
+                temperature=0.7,
+                max_output_tokens=600,
+                candidate_count=1
+            ),
+            system_instruction=system_prompt
         )
 
-        reply = response.content[0].text.strip()
+        reply = response.text.strip()
 
-        # Simple suggestion detection (no extra API call)
+        # Suggestion detection (keyword-based, cheap)
         last_user_msg = next((m.content for m in reversed(req.messages) if m.role == "user"), "")
         suggestion_keywords = [
             "suggest", "would be nice", "wish", "feedback", "complaint", "improve",
@@ -151,51 +160,44 @@ async def ai_chat(req: ChatRequest, current_user: User = Depends(get_current_use
 
         return {"reply": reply}
 
-    except RateLimitError:
-        raise HTTPException(429, "Rate limit reached — please try again in a minute")
-    except APIError as e:
-        logger.error(f"Anthropic API error: {e.status_code} - {e.message}")
-        if e.status_code == 401:
-            raise HTTPException(503, "AI service authentication failed")
-        if e.status_code in (429, 503):
-            raise HTTPException(503, "AI service temporarily unavailable")
-        raise HTTPException(500, "AI service error")
     except Exception as e:
-        logger.exception("Unexpected error in /chat")
-        raise HTTPException(500, "Something went wrong — please try again")
+        logger.exception("Gemini chat error")
+        if "rate limit" in str(e).lower():
+            raise HTTPException(429, "Rate limit reached — try again soon")
+        raise HTTPException(500, "AI service error — please try again")
 
 
 @router.post("/chat/stream")
 async def ai_chat_stream(req: ChatRequest, current_user: User = Depends(get_current_user)):
-    """Streaming chat with KotaBot (SSE)"""
-    if not anthropic_client.api_key:
+    """Streaming chat with KotaBot (Gemini SSE)"""
+    if not os.getenv("GEMINI_API_KEY"):
         raise HTTPException(503, "AI service not configured")
 
     system_prompt = await build_system_prompt(current_user, req.order_id)
 
     async def event_generator() -> AsyncGenerator[str, None]:
         try:
-            async with anthropic_client.messages.stream(
-                model=SONNET_MODEL,
-                max_tokens=600,
-                temperature=0.7,
-                system=system_prompt,
-                messages=[{"role": m.role, "content": m.content} for m in req.messages],
-            ) as stream:
-                async for text in stream.text_stream:
-                    if text:
-                        yield f"data: {json.dumps({'token': text})}\n\n"
+            model = genai.GenerativeModel(MODEL)
+            # Gemini streaming
+            response_stream = model.generate_content(
+                contents=[{"role": "user" if m.role == "user" else "model", "parts": [m.content]} for m in req.messages],
+                generation_config=types.GenerationConfig(
+                    temperature=0.7,
+                    max_output_tokens=600
+                ),
+                system_instruction=system_prompt,
+                stream=True
+            )
+
+            for chunk in response_stream:
+                if chunk.text:
+                    yield f"data: {json.dumps({'token': chunk.text})}\n\n"
 
             yield "data: [DONE]\n\n"
 
-        except RateLimitError:
-            yield f"data: {json.dumps({'error': 'Rate limit reached'})}\n\n"
-        except APIError as e:
-            logger.error(f"Stream API error: {e}")
-            yield f"data: {json.dumps({'error': 'AI service unavailable'})}\n\n"
         except Exception as e:
-            logger.exception("Stream error")
-            yield f"data: {json.dumps({'error': 'Unexpected error'})}\n\n"
+            logger.exception("Gemini stream error")
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -205,14 +207,13 @@ async def save_suggestion(
     body: SuggestionRequest,
     current_user: User = Depends(get_current_user)
 ):
-    """Save feedback/suggestion directly"""
     try:
         suggestion = Suggestion(
             user_id=str(current_user.id),
             user_email=current_user.email,
             message=body.message.strip(),
             category=body.category.strip() if body.category else "general",
-            sentiment="neutral",  # can be improved later
+            sentiment="neutral",
             created_at=datetime.utcnow()
         )
         await suggestion.insert()
@@ -225,7 +226,6 @@ async def save_suggestion(
 
 @router.get("/suggestions")
 async def get_suggestions(current_user: User = Depends(get_current_user)):
-    """Admin-only: list all suggestions (add role check in production)"""
     try:
         suggestions = await Suggestion.find_all().sort("-created_at").limit(100).to_list()
         summary = {"positive": 0, "neutral": 0, "negative": 0}
