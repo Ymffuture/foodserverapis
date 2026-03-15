@@ -26,14 +26,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from routes import auth, menu, orders, payments, ai  # ← add ai
+from routes import auth, menu, orders, payments, ai, routes_analytics # ← add ai
+
 
 app.include_router(auth.router,     prefix="/auth",     tags=["Auth"])
 app.include_router(menu.router,     prefix="/menu",     tags=["Menu"])
 app.include_router(orders.router,   prefix="/orders",   tags=["Orders"])
 app.include_router(payments.router, prefix="/payments", tags=["Payments"])
 app.include_router(ai.router,       prefix="/ai",       tags=["AI"])   # ← new
-
+app.include_router(routes_analytics.router, tags=["Analytics"])
 
 @app.get("/")
 def home():
