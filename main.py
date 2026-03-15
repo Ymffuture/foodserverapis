@@ -1,4 +1,4 @@
-# main.py
+# main.py  (updated — add AI router + register Suggestion in Beanie)
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -18,14 +18,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# ✅ FIX: Auth is done via Authorization: Bearer token in headers, NOT cookies.
-# Therefore allow_credentials MUST be False and allow_origins can be ["*"].
-#
-# Old config had allow_credentials=True with specific origins. This is only needed
-# when using cookie-based auth. With Bearer tokens we don't need credentials mode,
-# so wildcard origins work fine and won't cause CORS preflight failures.
-#
-# This also fixes local development (localhost:5173 was being blocked).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -34,12 +26,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from routes import auth, menu, orders, payments
+from routes import auth, menu, orders, payments, ai  # ← add ai
 
 app.include_router(auth.router,     prefix="/auth",     tags=["Auth"])
 app.include_router(menu.router,     prefix="/menu",     tags=["Menu"])
 app.include_router(orders.router,   prefix="/orders",   tags=["Orders"])
 app.include_router(payments.router, prefix="/payments", tags=["Payments"])
+app.include_router(ai.router,       prefix="/ai",       tags=["AI"])   # ← new
 
 
 @app.get("/")

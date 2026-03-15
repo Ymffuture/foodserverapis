@@ -1,4 +1,4 @@
-# database.py
+# database.py  (updated — register Suggestion model)
 from motor.motor_asyncio import AsyncIOMotorClient
 from beanie import init_beanie
 from config import DATABASE_URL
@@ -9,7 +9,6 @@ async def init_db():
     global client
     client = AsyncIOMotorClient(DATABASE_URL)
 
-    # Explicit DB name — works whether or not the URI includes one
     database = client["kotabites"]
 
     await init_beanie(
@@ -18,6 +17,7 @@ async def init_db():
             "models.user.User",
             "models.menu.MenuItem",
             "models.order.Order",
+            "models.suggestion.Suggestion",   # ← new
         ]
     )
     print("✅ Connected to MongoDB + Beanie initialized")
