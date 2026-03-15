@@ -28,7 +28,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-MODEL = "gemini-1.5-flash"
+MODEL = "gemini-2.5-flash"
 
 
 # ── Schemas ────────────────────────────────────────────────────────────────
