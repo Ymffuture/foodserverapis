@@ -10,4 +10,4 @@ python-jose[cryptography]==3.3.0
 requests==2.32.3
 cloudinary==1.41.0
 python-multipart==0.0.20
-anthropic==0.49.0
+google-generativeai==0.8.3
