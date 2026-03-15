@@ -86,7 +86,7 @@ Active order the customer is asking about:
 
     # ── Recent order history ──
     try:
-        recent = await Order.find(Order.user_id == str(user.id)).to_list(limit=5)
+        recent = await Order.find(Order.user_id == str(user.id)).limit(5).to_list()
         if recent:
             hist_lines = [
                 f"  • #{str(o.id)[-8:].upper()} — {o.status} — R{o.total_amount:.2f} — "
@@ -146,7 +146,7 @@ async def ai_chat(
     system = await _build_system_prompt(current_user, req.order_id)
 
     response = _client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
         max_tokens=600,
         system=system,
         messages=[{"role": m.role, "content": m.content} for m in req.messages],
@@ -207,7 +207,7 @@ async def ai_chat_stream(
 
     def generate():
         with _client.messages.stream(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=600,
             system=system,
             messages=[{"role": m.role, "content": m.content} for m in req.messages],
