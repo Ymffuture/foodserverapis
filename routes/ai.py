@@ -30,6 +30,10 @@ if GEMINI_API_KEY:
 
 MODEL = "gemini-2.5-flash"
 
+# Max number of conversation turns to send to Gemini.
+# Keeps token usage bounded and prevents context-window failures on long chats.
+MAX_HISTORY_TURNS = 20
+
 
 # ── Schemas ────────────────────────────────────────────────────────────────
 class ChatMessage(BaseModel):
@@ -50,8 +54,7 @@ class SuggestionRequest(BaseModel):
 # ── System Prompt ──────────────────────────────────────────────────────────
 async def build_system_prompt(user: User, order_id: Optional[str] = None) -> str:
 
-    # ── 1. Menu ─────────────────────────────────────────────────────────────
-    # ✅ FIX: correct Beanie API — to_list(length=N), NOT .limit().to_list()
+    # ── 1. Menu ──────────────────────────────────────────────────────────────
     try:
         items = await MenuItem.find_all().to_list(length=60)
         if items:
@@ -66,7 +69,7 @@ async def build_system_prompt(user: User, order_id: Optional[str] = None) -> str
         logger.warning(f"Menu fetch failed: {e}")
         menu_text = "(Menu unavailable)"
 
-    # ── 2. Active order context (if user is on the order page) ──────────────
+    # ── 2. Active order context ───────────────────────────────────────────────
     order_block = ""
     if order_id:
         try:
@@ -86,9 +89,7 @@ Address: {order.delivery_address or "Not specified"}
         except Exception as e:
             logger.warning(f"Active order fetch failed: {e}")
 
-    # ── 3. Recent order history ──────────────────────────────────────────────
-    # ✅ FIX: always fetch the user's recent orders so KotaBot can reference
-    # their history, total spend, favourite items, etc.
+    # ── 3. Recent order history ───────────────────────────────────────────────
     history_block = ""
     try:
         recent_orders = await Order.find(
@@ -96,9 +97,7 @@ Address: {order.delivery_address or "Not specified"}
         ).to_list(length=10)
 
         if recent_orders:
-            # Sort by created_at descending (most recent first)
             recent_orders.sort(key=lambda o: o.created_at, reverse=True)
-
             history_lines = []
             total_spent = 0.0
             for o in recent_orders:
@@ -110,7 +109,6 @@ Address: {order.delivery_address or "Not specified"}
                 history_lines.append(
                     f"  • #{str(o.id)[-8:].upper()} | {status:10} | R{o.total_amount:>7.2f} | {o.created_at.strftime('%d %b %Y')} | {items_str}"
                 )
-
             history_block = f"""
 === ORDER HISTORY ({len(recent_orders)} orders, R{total_spent:.2f} total spent) ===
 {chr(10).join(history_lines)}
@@ -121,7 +119,7 @@ Address: {order.delivery_address or "Not specified"}
         logger.warning(f"Order history fetch failed: {e}")
         history_block = ""
 
-    # ── 4. Assemble prompt ───────────────────────────────────────────────────
+    # ── 4. Assemble prompt ────────────────────────────────────────────────────
     return f"""You are KotaBot 🍔🤖 — the friendly AI helper for KotaBites, Johannesburg's favourite kota delivery service.
 
 Your goals:
@@ -168,23 +166,61 @@ SUGGESTION_KEYWORDS = [
 ]
 
 
+def _safe_response_text(response) -> str:
+    """
+    FIX 1: response.text raises ValueError when Gemini blocks or returns
+    empty candidates. Always extract text safely so the endpoint never
+    crashes silently mid-conversation.
+    """
+    try:
+        text = response.text
+        if text:
+            return text.strip()
+    except (ValueError, AttributeError):
+        pass
+
+    # Fallback: walk candidates manually
+    try:
+        for candidate in (response.candidates or []):
+            parts = getattr(candidate.content, "parts", [])
+            combined = "".join(getattr(p, "text", "") for p in parts).strip()
+            if combined:
+                return combined
+    except Exception:
+        pass
+
+    return ""
+
+
 def _to_gemini_messages(messages: List[ChatMessage]) -> List[dict]:
+    """
+    FIX 2: Gemini requires:
+      • First message must be role "user" (not "model")
+      • No two consecutive messages with the same role
+    FIX 4: Trim to MAX_HISTORY_TURNS to avoid context-window overflow.
+    """
+    # Keep only the most recent turns to stay within Gemini's context window
+    trimmed = messages[-MAX_HISTORY_TURNS:] if len(messages) > MAX_HISTORY_TURNS else messages
+
     result = []
-    for m in messages:
+    for m in trimmed:
         result.append({
             "role": "user" if m.role == "user" else "model",
             "parts": [{"text": m.content}],
         })
-    # Gemini requires the first turn to be "user" — drop any leading model messages
+
+    # Drop any leading "model" turns — Gemini requires conversations to start with "user"
     while result and result[0]["role"] == "model":
         result.pop(0)
-    # Also collapse consecutive same-role messages (another Gemini constraint)
-    deduped = []
+
+    # Collapse consecutive same-role messages (Gemini rejects them)
+    deduped: List[dict] = []
     for turn in result:
         if deduped and deduped[-1]["role"] == turn["role"]:
             deduped[-1]["parts"][0]["text"] += "\n" + turn["parts"][0]["text"]
         else:
             deduped.append(turn)
+
     return deduped
 
 
@@ -194,7 +230,6 @@ async def _maybe_save_suggestion(messages: List[ChatMessage], user: User):
     if not any(kw in last.lower() for kw in SUGGESTION_KEYWORDS):
         return
 
-    # Quick AI classification
     category, sentiment = "general", "neutral"
     try:
         model = genai.GenerativeModel("gemini-2.5-flash")
@@ -204,10 +239,11 @@ async def _maybe_save_suggestion(messages: List[ChatMessage], user: User):
             f'{{"category": "<food|service|app|general>", "sentiment": "<positive|neutral|negative>"}}\n'
             f'Feedback: "{last[:300]}"'
         )
-        raw = meta.text.strip().strip("```json").strip("```").strip()
-        parsed = json.loads(raw)
-        category  = parsed.get("category", "general")
-        sentiment = parsed.get("sentiment", "neutral")
+        raw = _safe_response_text(meta).strip("```json").strip("```").strip()
+        if raw:
+            parsed = json.loads(raw)
+            category = parsed.get("category", "general")
+            sentiment = parsed.get("sentiment", "neutral")
     except Exception as e:
         logger.warning(f"Suggestion classification failed: {e}")
 
@@ -237,6 +273,13 @@ async def ai_chat(
         raise HTTPException(503, "AI service not configured — GEMINI_API_KEY missing")
 
     system_prompt = await build_system_prompt(current_user, req.order_id)
+    gemini_messages = _to_gemini_messages(req.messages)
+
+    # FIX 3: Guard against empty message list after stripping/dedup.
+    # This can happen if the frontend sends only assistant messages
+    # (e.g. the greeting) with no user message yet.
+    if not gemini_messages:
+        return {"reply": "Yebo! How can I help you today?"}
 
     try:
         model = genai.GenerativeModel(
@@ -244,17 +287,17 @@ async def ai_chat(
             system_instruction=system_prompt,
         )
 
-        # ✅ Run blocking Gemini call in a thread — never blocks the event loop
         response = await asyncio.to_thread(
             model.generate_content,
-            contents=_to_gemini_messages(req.messages),
+            contents=gemini_messages,
             generation_config=genai.GenerationConfig(
                 temperature=0.7,
                 max_output_tokens=600,
             ),
         )
 
-        reply = (response.text or "").strip()
+        # FIX 1: use safe extractor instead of response.text directly
+        reply = _safe_response_text(response)
         if not reply:
             reply = "Eish, I couldn't generate a reply right now. Please try again!"
 
@@ -271,16 +314,25 @@ async def ai_chat_stream(
     req: ChatRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """SSE streaming KotaBot — correct queue-based approach."""
+    """SSE streaming KotaBot."""
     if not GEMINI_API_KEY:
         raise HTTPException(503, "AI service not configured — GEMINI_API_KEY missing")
 
     system_prompt = await build_system_prompt(current_user, req.order_id)
+    gemini_messages = _to_gemini_messages(req.messages)
 
-    # ✅ FIX: use asyncio.Queue to bridge the sync Gemini stream
-    # and the async SSE generator — never blocks the event loop
+    # FIX 3: Guard against empty message list
+    if not gemini_messages:
+        async def _empty():
+            yield f"data: {json.dumps({'token': 'Yebo! How can I help you today?'})}\n\n"
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(_empty(), media_type="text/event-stream")
+
     queue: asyncio.Queue = asyncio.Queue()
-    loop = asyncio.get_event_loop()
+
+    # FIX 2: get_running_loop() is correct inside an async function.
+    # get_event_loop() is deprecated in Python 3.10+ and can raise in 3.12+.
+    loop = asyncio.get_running_loop()
 
     def _run_stream():
         try:
@@ -289,7 +341,7 @@ async def ai_chat_stream(
                 system_instruction=system_prompt,
             )
             stream = model.generate_content(
-                contents=_to_gemini_messages(req.messages),
+                contents=gemini_messages,
                 generation_config=genai.GenerationConfig(
                     temperature=0.7,
                     max_output_tokens=600,
@@ -297,8 +349,14 @@ async def ai_chat_stream(
                 stream=True,
             )
             for chunk in stream:
-                if chunk.text:
-                    loop.call_soon_threadsafe(queue.put_nowait, chunk.text)
+                # FIX 1: use safe extractor per chunk as well
+                text = ""
+                try:
+                    text = chunk.text or ""
+                except (ValueError, AttributeError):
+                    pass
+                if text:
+                    loop.call_soon_threadsafe(queue.put_nowait, text)
         except Exception as e:
             logger.exception("Gemini stream thread error")
             loop.call_soon_threadsafe(queue.put_nowait, None)  # signal error
@@ -306,7 +364,8 @@ async def ai_chat_stream(
             loop.call_soon_threadsafe(queue.put_nowait, "<<DONE>>")
 
     async def event_generator() -> AsyncGenerator[str, None]:
-        loop.run_in_executor(None, _run_stream)
+        # Store the future so exceptions are not silently swallowed
+        _future = loop.run_in_executor(None, _run_stream)  # noqa: F841
         while True:
             token = await queue.get()
             if token == "<<DONE>>":
@@ -345,7 +404,6 @@ async def save_suggestion(
 async def get_suggestions(current_user: User = Depends(get_current_user)):
     """Admin: all suggestions with sentiment breakdown."""
     try:
-        # ✅ FIX: correct Beanie API
         suggestions = await Suggestion.find_all().to_list(length=500)
         summary = {"positive": 0, "neutral": 0, "negative": 0}
         for s in suggestions:
