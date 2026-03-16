@@ -39,7 +39,7 @@ if KIMI_API_KEY:
         },
     )
 
-MAX_HISTORY_TURNS = 20
+MAX_HISTORY_TURNS = 100
 
 # Only these statuses allow cancellation
 CANCELLABLE_STATUSES = {OrderStatus.PENDING, OrderStatus.PAID}
