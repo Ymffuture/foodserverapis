@@ -34,7 +34,7 @@ if KIMI_API_KEY:
         api_key=KIMI_API_KEY,
         base_url="https://openrouter.ai/api/v1",
         default_headers={
-            "HTTP-Referer": "https://swiftmeta.vercel.app",
+            "HTTP-Referer": "https://foodsorder.vercel.app",
             "X-Title": "kotabots",
         },
     )
