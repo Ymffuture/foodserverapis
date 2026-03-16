@@ -1,51 +1,68 @@
 # utils/business_hours.py
-from datetime import datetime
-import pytz
+from datetime import datetime, timezone, timedelta
 
-SAST = pytz.timezone("Africa/Johannesburg")
+# SAST is UTC+2, no daylight saving time
+SAST_OFFSET = timedelta(hours=2)
+SAST = timezone(SAST_OFFSET)
 
-# Business hours in SAST
+# Business hours (24h format)
 HOURS = {
     0: ("09:00", "17:00"),   # Monday
     1: ("09:00", "17:00"),   # Tuesday
     2: ("09:00", "17:00"),   # Wednesday
     3: ("09:00", "17:00"),   # Thursday
     4: ("09:00", "17:00"),   # Friday
-    5: ("09:00", "14:00"),   # Saturday  (9am + 5 hours)
-    6: None,                  # Sunday    (closed)
+    5: ("09:00", "14:00"),   # Saturday (5 hours)
+    6: None,                  # Sunday — closed
 }
 
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 
-def _parse_time(t: str, date: datetime.date) -> datetime:
-    h, m = map(int, t.split(":"))
-    return SAST.localize(datetime(date.year, date.month, date.day, h, m))
-
-
 def get_status() -> dict:
     """
     Returns the current open/closed status and today's hours.
-    All times are in SAST (UTC+2).
+    Uses stdlib only — no pytz needed. SAST = UTC+2, no DST.
     """
     now_sast = datetime.now(SAST)
-    weekday  = now_sast.weekday()        # 0=Mon, 6=Sun
-    today    = now_sast.date()
+    weekday  = now_sast.weekday()   # 0=Mon, 6=Sun
     hours    = HOURS.get(weekday)
 
+    schedule = {
+        "Monday":    "09:00 – 17:00",
+        "Tuesday":   "09:00 – 17:00",
+        "Wednesday": "09:00 – 17:00",
+        "Thursday":  "09:00 – 17:00",
+        "Friday":    "09:00 – 17:00",
+        "Saturday":  "09:00 – 14:00",
+        "Sunday":    "Closed",
+    }
+
     if hours is None:
+        # Find next open day
+        for delta in range(1, 8):
+            next_wd = (weekday + delta) % 7
+            if HOURS.get(next_wd) is not None:
+                next_day  = DAY_NAMES[next_wd]
+                next_open = HOURS[next_wd][0]
+                break
         return {
             "is_open":    False,
             "day":        DAY_NAMES[weekday],
             "open_time":  None,
             "close_time": None,
-            "message":    "We are closed on Sundays. See you Monday!",
-            "next_open":  "Monday at 09:00",
+            "now_sast":   now_sast.strftime("%H:%M"),
+            "message":    f"Closed today (Sunday). We reopen {next_day} at {next_open}.",
+            "schedule":   schedule,
         }
 
-    open_dt  = _parse_time(hours[0], today)
-    close_dt = _parse_time(hours[1], today)
-    is_open  = open_dt <= now_sast < close_dt
+    # Build open/close datetimes in SAST for today
+    oh, om = map(int, hours[0].split(":"))
+    ch, cm = map(int, hours[1].split(":"))
+    open_dt  = now_sast.replace(hour=oh, minute=om, second=0, microsecond=0)
+    close_dt = now_sast.replace(hour=ch, minute=cm, second=0, microsecond=0)
+
+    is_open = open_dt <= now_sast < close_dt
 
     if now_sast < open_dt:
         msg = f"We open at {hours[0]} today. See you soon!"
@@ -57,14 +74,14 @@ def get_status() -> dict:
             msg = f"We are open until {hours[1]} today."
     else:
         # After closing — find next open day
-        msg = f"We are closed for today. Opening tomorrow at 09:00."
-        # Find next open weekday
+        msg = "Closed for today."
         for delta in range(1, 8):
             next_wd = (weekday + delta) % 7
             if HOURS.get(next_wd) is not None:
                 next_day  = DAY_NAMES[next_wd]
                 next_open = HOURS[next_wd][0]
-                msg = f"Closed for today. Opening {next_day} at {next_open}."
+                label     = "tomorrow" if delta == 1 else next_day
+                msg = f"Closed for today. Opens {label} at {next_open}."
                 break
 
     return {
@@ -74,13 +91,5 @@ def get_status() -> dict:
         "close_time": hours[1],
         "now_sast":   now_sast.strftime("%H:%M"),
         "message":    msg,
-        "schedule": {
-            "Monday":    "09:00 – 17:00",
-            "Tuesday":   "09:00 – 17:00",
-            "Wednesday": "09:00 – 17:00",
-            "Thursday":  "09:00 – 17:00",
-            "Friday":    "09:00 – 17:00",
-            "Saturday":  "09:00 – 14:00",
-            "Sunday":    "Closed",
-        },
+        "schedule":   schedule,
     }
