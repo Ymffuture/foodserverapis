@@ -169,18 +169,23 @@ SUGGESTION_KEYWORDS = [
 
 
 def _to_gemini_messages(messages: List[ChatMessage]) -> List[dict]:
-    """
-    ✅ FIX: correct Gemini SDK format.
-    Was: "parts": [m.content]  ← string, not a Part dict → malformed input
-    Now: "parts": [{"text": m.content}]  ← correct
-    """
     result = []
     for m in messages:
         result.append({
             "role": "user" if m.role == "user" else "model",
             "parts": [{"text": m.content}],
         })
-    return result
+    # Gemini requires the first turn to be "user" — drop any leading model messages
+    while result and result[0]["role"] == "model":
+        result.pop(0)
+    # Also collapse consecutive same-role messages (another Gemini constraint)
+    deduped = []
+    for turn in result:
+        if deduped and deduped[-1]["role"] == turn["role"]:
+            deduped[-1]["parts"][0]["text"] += "\n" + turn["parts"][0]["text"]
+        else:
+            deduped.append(turn)
+    return deduped
 
 
 async def _maybe_save_suggestion(messages: List[ChatMessage], user: User):
