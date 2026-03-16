@@ -31,14 +31,14 @@ KIMI_API_KEY = os.getenv("KIMI_API_KEY")
 #   moonshot-v1-8k   — fastest,  cheapest  (good for chat)
 #   moonshot-v1-32k  — balanced            (recommended)
 #   moonshot-v1-128k — largest context     (long documents)
-MODEL = os.getenv("KIMI_MODEL", "moonshot-v1-32k")
+MODEL = os.getenv("MODEL_AI")
 
 # Kimi's API is fully OpenAI-compatible — just swap the base_url
 kimi_client: Optional[AsyncOpenAI] = None
 if KIMI_API_KEY:
     kimi_client = AsyncOpenAI(
         api_key=KIMI_API_KEY,
-        base_url="https://api.moonshot.ai/v1",
+        base_url="https://openrouter.ai/api/v1",
     )
 
 # Max conversation turns sent to Kimi — prevents context-window overflow
