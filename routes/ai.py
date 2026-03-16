@@ -18,6 +18,8 @@ from models.order import Order
 from models.menu import MenuItem
 from models.suggestion import Suggestion
 from utils.enums import OrderStatus
+from utils.business_hours import get_status   # ← NEW
+
 
 router = APIRouter(tags=["AI Assistant"])
 
@@ -68,7 +70,17 @@ class CancelOrderRequest(BaseModel):
 
 # ── System Prompt ──────────────────────────────────────────────────────────
 async def build_system_prompt(user: User, order_id: Optional[str] = None) -> str:
-
+ 
+    # 1. Business hours status
+    hours_status = get_status()
+    if hours_status["is_open"]:
+        hours_block = (
+            f"DELIVERY STATUS: OPEN — closes at {hours_status['close_time']} SAST today ({hours_status['day']})"
+        )
+    else:
+        hours_block = (
+            f"DELIVERY STATUS: CLOSED — {hours_status['message']}"
+        )
     # 1. Menu
     try:
         items = await MenuItem.find_all().to_list(length=60)
@@ -140,6 +152,15 @@ Your goals:
 3. Accept suggestions, compliments and complaints
 4. Answer general questions about KotaBites
 5. Help customers cancel orders that are still cancellable
+=== {hours_block} ===
+ 
+DELIVERY SCHEDULE:
+- Monday to Friday: 09:00 – 17:00 (SAST)
+- Saturday: 09:00 – 14:00 (SAST)
+- Sunday: CLOSED
+ 
+If delivery is currently CLOSED, politely tell the user we are closed and when we next open.
+If a user tries to order while closed, explain we cannot take orders right now and give the next opening time.
 
 === CURRENT MENU ===
 {menu_text}
