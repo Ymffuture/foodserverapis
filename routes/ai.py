@@ -41,7 +41,7 @@ if KIMI_API_KEY:
         },
     )
 
-MAX_HISTORY_TURNS = 30
+MAX_HISTORY_TURNS = 20
 
 # Only these statuses allow cancellation
 CANCELLABLE_STATUSES = {OrderStatus.PENDING, OrderStatus.PAID}
@@ -493,7 +493,7 @@ async def test_ai():
     except Exception as e:
         return {"error": str(e)}
 
-    @router.get("/debug")
+@router.get("/debug")
 async def debug_openrouter():
     if not client:
         return {"status": "error", "detail": "No client — KIMI_API_KEY missing or empty"}
