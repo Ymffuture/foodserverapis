@@ -486,7 +486,8 @@ async def test_ai():
         resp = await client.chat.completions.create(
             model=MODEL,
             messages=[{"role": "user", "content": "Say yebo"}],
-            max_tokens=10,
+            max_completion_tokens=100,          # ← changed + increased
+            # thinking={"type": "disabled"}     # ← uncomment if using kimi-k2.5 and you want no reasoning
         )
         return {"reply": resp.choices[0].message.content}
     except Exception as e:
