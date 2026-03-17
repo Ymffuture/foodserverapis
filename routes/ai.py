@@ -491,3 +491,22 @@ async def test_ai():
         return {"reply": resp.choices[0].message.content}
     except Exception as e:
         return {"error": str(e)}
+
+    @router.get("/debug")
+async def debug_openrouter():
+    if not client:
+        return {"status": "error", "detail": "No client — KIMI_API_KEY missing or empty"}
+    try:
+        resp = await client.chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "user", "content": "Just say 'API works'"}],
+            max_tokens=10,
+            temperature=0.0
+        )
+        return {
+            "status": "ok",
+            "reply": resp.choices[0].message.content.strip(),
+            "usage": resp.usage.model_dump() if resp.usage else None
+        }
+    except Exception as e:
+        return {"status": "error", "detail": str(e), "type": type(e).__name__}
