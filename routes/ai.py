@@ -281,8 +281,8 @@ async def _maybe_save_suggestion(messages: List[ChatMessage], user: User) -> Non
                     ),
                 }],
                 temperature=0.1,
-                max_tokens=100,                    # ← increased
-                reasoning={"effort": "none"},      # ← disable thinking
+                max_tokens=100,
+                extra_body={"thinking": {"type": "disabled"}},
             )
             raw = (resp.choices[0].message.content or "").strip("```json").strip("```").strip()
             if raw:
@@ -328,8 +328,8 @@ async def ai_chat(
             model=MODEL,
             messages=[{"role": "system", "content": system_prompt}] + chat_messages,
             temperature=0.7,
-            max_tokens=4096,                    # ← increased
-            reasoning={"effort": "none"},       # ← disable thinking (fixes everything)
+            max_tokens=4096,
+            extra_body={"thinking": {"type": "disabled"}},
         )
 
         reply = (response.choices[0].message.content or "").strip()
@@ -382,8 +382,8 @@ async def ai_chat_stream(
                 model=MODEL,
                 messages=[{"role": "system", "content": system_prompt}] + chat_messages,
                 temperature=0.7,
-                max_tokens=4096,                    # ← increased
-                reasoning={"effort": "none"},       # ← disable thinking
+                max_tokens=4096,
+                extra_body={"thinking": {"type": "disabled"}},
                 stream=True,
             )
             async for chunk in stream:
@@ -489,8 +489,8 @@ async def test_ai():
         resp = await client.chat.completions.create(
             model=MODEL,
             messages=[{"role": "user", "content": "Say yebo"}],
-            max_tokens=200,                     # ← fixed
-            reasoning={"effort": "none"},       # ← disable thinking
+            max_tokens=200,
+            extra_body={"thinking": {"type": "disabled"}},
         )
         return {"reply": resp.choices[0].message.content}
     except Exception as e:
@@ -505,9 +505,9 @@ async def debug_openrouter():
         resp = await client.chat.completions.create(
             model=MODEL,
             messages=[{"role": "user", "content": "Just say 'API works'"}],
-            max_tokens=200,                     # ← increased
+            max_tokens=200,
             temperature=0.0,
-            reasoning={"effort": "none"},       # ← disable thinking
+            extra_body={"thinking": {"type": "disabled"}},
         )
         return {
             "status": "ok",
