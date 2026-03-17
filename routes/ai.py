@@ -28,7 +28,7 @@ logger.setLevel(logging.INFO)
 
 # ── OpenRouter + Kimi K2.5 Setup ───────────────────────────────────────────
 KIMI_API_KEY = os.getenv("KIMI_API_KEY")
-MODEL = "moonshotai/kimi-k2.5"
+MODEL = "openrouter/hunter-alpha"
 
 client: Optional[AsyncOpenAI] = None
 if KIMI_API_KEY:
