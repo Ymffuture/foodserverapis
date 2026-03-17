@@ -476,3 +476,18 @@ async def get_suggestions(current_user: User = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"Get suggestions failed: {e}")
         raise HTTPException(500, "Could not load suggestions")
+
+
+@router.get("/test-ai")
+async def test_ai():
+    if not client:
+        return {"error": "No client — missing KIMI_API_KEY"}
+    try:
+        resp = await client.chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "user", "content": "Say yebo"}],
+            max_tokens=10,
+        )
+        return {"reply": resp.choices[0].message.content}
+    except Exception as e:
+        return {"error": str(e)}
