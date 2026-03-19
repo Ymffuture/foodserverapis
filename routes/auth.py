@@ -223,10 +223,4 @@ async def verify_email(body: VerifyBody):
     user.verification_token  = None
     await user.save()
     return {"msg": "Email verified successfully! 🎉"}
-```
 
----
-
-### `requirements.txt` — add one line
-```
-httpx==0.27.0
