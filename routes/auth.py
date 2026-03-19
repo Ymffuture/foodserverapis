@@ -68,14 +68,24 @@ def _check_rate(store: dict, key: str) -> None:
 async def register(user: UserCreate):
     if await User.find_one(User.email == user.email):
         raise HTTPException(400, "Email already registered")
+
+    token = secrets.token_urlsafe(32)
+
     await User(
         email=user.email,
         hashed_password=get_password_hash(user.password),
         full_name=user.full_name,
         phone=user.phone,
         email_verified=False,
+        verification_token=token,
     ).insert()
-    return {"msg": "User created successfully"}
+
+    return {
+        "msg":       "User created successfully",
+        "token":     token,
+        "email":     user.email,
+        "full_name": user.full_name,
+    }
 
 
 @router.post("/login", response_model=Token)
