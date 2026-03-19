@@ -28,7 +28,7 @@ logger.setLevel(logging.INFO)
 
 # ── OpenRouter + Kimi K2.5 Setup ───────────────────────────────────────────
 KIMI_API_KEY = os.getenv("KIMI_API_KEY")
-MODEL = "openrouter/hunter-alpha"
+MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
 
 client: Optional[AsyncOpenAI] = None
 if KIMI_API_KEY:
