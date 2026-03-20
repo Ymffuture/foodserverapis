@@ -39,6 +39,15 @@ class Token(BaseModel):
     access_token: str
     token_type: str
 
+# ✅ NEW: Extended login response with user data
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str
+    email: str
+    full_name: str
+    email_verified: bool
+    picture: Optional[str] = None
+
 class GoogleBody(BaseModel):
     access_token: str
 
@@ -88,12 +97,31 @@ async def register(user: UserCreate):
     }
 
 
-@router.post("/login", response_model=Token)
+# ✅ FIXED: Login endpoint now checks email verification and returns user data
+@router.post("/login", response_model=LoginResponse)
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     user = await User.find_one(User.email == form_data.username)
+    
+    # Check if user exists and password is correct
     if not user or not user.hashed_password or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(401, "Incorrect email or password", headers={"WWW-Authenticate": "Bearer"})
-    return {"access_token": create_access_token({"sub": user.email}), "token_type": "bearer"}
+    
+    # ✅ CRITICAL: Check if email is verified before allowing login
+    if not user.email_verified:
+        raise HTTPException(
+            status_code=403,
+            detail="Please verify your email before logging in. Check your inbox for the verification link."
+        )
+    
+    # Return access token with user data including email_verified status
+    return {
+        "access_token": create_access_token({"sub": user.email}),
+        "token_type": "bearer",
+        "email": user.email,
+        "full_name": user.full_name,
+        "email_verified": user.email_verified,
+        "picture": user.picture
+    }
 
 
 # ── Google OAuth ──────────────────────────────────────────────────────────────
@@ -123,7 +151,7 @@ async def google_login(body: GoogleBody):
             phone=None,
             google_id=info.get("sub"),
             picture=info.get("picture"),
-            email_verified=bool(info.get("email_verified", True)),
+            email_verified=bool(info.get("email_verified", True)),  # Google emails are pre-verified
         )
         await user.insert()
         logger.info(f"New Google user created: {email}")
@@ -134,7 +162,7 @@ async def google_login(body: GoogleBody):
         if info.get("picture") and user.picture != info.get("picture"):
             user.picture = info.get("picture"); changed = True
         if not user.email_verified:
-            user.email_verified = True; changed = True
+            user.email_verified = True; changed = True  # Google accounts auto-verify
         if changed:
             await user.save()
 
@@ -233,4 +261,3 @@ async def verify_email(body: VerifyBody):
     user.verification_token  = None
     await user.save()
     return {"msg": "Email verified successfully! 🎉"}
-
