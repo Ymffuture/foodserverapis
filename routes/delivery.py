@@ -919,3 +919,31 @@ async def get_order_delivery_info(
         "delivered_at": assignment.delivered_at,
         "actual_time":  assignment.actual_time,
     }
+
+
+@router.get("/assignment-by-order/{order_id}")
+async def get_assignment_by_order(
+    order_id: int,
+    current_user: User = Depends(get_current_user)
+):
+    """Get delivery assignment details for a specific order (for customers)"""
+    assignment = await DeliveryAssignment.filter(
+        order_id=order_id
+    ).select_related("driver").first()
+    
+    if not assignment:
+        raise HTTPException(status_code=404, detail="No delivery found for this order")
+    
+    return {
+        "assignment_id": assignment.id,
+        "status": assignment.status,
+        "driver": {
+            "id": assignment.driver.id,
+            "full_name": assignment.driver.full_name,
+            "phone": assignment.driver.phone,
+            "vehicle_type": assignment.driver.vehicle_type,
+        } if assignment.driver else None,
+        "picked_up_at": assignment.picked_up_at,
+        "delivered_at": assignment.delivered_at,
+        "created_at": assignment.created_at,
+    }
