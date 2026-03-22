@@ -34,7 +34,7 @@ app.include_router(menu.router,              prefix="/menu",     tags=["Menu"])
 app.include_router(orders.router,            prefix="/orders",   tags=["Orders"])
 app.include_router(payments.router,          prefix="/payments", tags=["Payments"])
 app.include_router(ai.router,                prefix="/ai",       tags=["AI"])
-app.include_router(delivery.router,          prefix="/delivery", tags=["Delivery"])  # ← FIXED: added prefix
+app.include_router(delivery.router,           tags=["Delivery"])  # ← FIXED: added prefix
 app.include_router(routes_analytics.router,  tags=["Analytics"])
 
 @app.get("/")
