@@ -17,8 +17,10 @@ from models.user import User
 from models.order import Order
 from models.menu import MenuItem
 from models.suggestion import Suggestion
+from models.delivery_driver import DeliveryDriver, DriverStatus
+from models.wallet_transaction import WalletTransaction
 from utils.enums import OrderStatus
-from utils.business_hours import get_status   # ← NEW
+from utils.business_hours import get_status
 
 
 router = APIRouter(tags=["AI Assistant"])
@@ -26,7 +28,7 @@ router = APIRouter(tags=["AI Assistant"])
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# ── OpenRouter + Kimi K2.5 Setup ───────────────────────────────────────────
+# ── OpenRouter Setup ───────────────────────────────────────────────────────
 KIMI_API_KEY = os.getenv("KIMI_API_KEY")
 MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
 
@@ -42,8 +44,6 @@ if KIMI_API_KEY:
     )
 
 MAX_HISTORY_TURNS = 100
-
-# Only these statuses allow cancellation
 CANCELLABLE_STATUSES = {OrderStatus.PENDING, OrderStatus.PAID}
 
 
@@ -68,10 +68,75 @@ class CancelOrderRequest(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=500)
 
 
+# ── Driver context builder ─────────────────────────────────────────────────
+async def _build_driver_block(user_id: str) -> str:
+    """
+    Look up whether this user is also a driver.
+    Returns a formatted block for the system prompt, or empty string if not a driver.
+    """
+    try:
+        driver = await DeliveryDriver.find_one(DeliveryDriver.user_id == user_id)
+        if not driver:
+            return ""
+
+        status_label = {
+            "pending":   "Under Review",
+            "approved":  "Active Driver",
+            "rejected":  "Rejected",
+            "suspended": "Suspended",
+        }.get(driver.status.value, driver.status.value)
+
+        availability = "Online (accepting orders)" if driver.is_available else "Offline"
+
+        # Last 5 transactions
+        recent_tx = await WalletTransaction.find(
+            WalletTransaction.driver_id == str(driver.id)
+        ).sort("-created_at").limit(5).to_list()
+
+        tx_lines = ""
+        if recent_tx:
+            tx_lines = "\nRecent transactions:\n" + "\n".join(
+                f"  - {t.type.value:20} | {'+'if t.amount>0 else ''}R{t.amount:.2f} "
+                f"| Bal after: R{t.balance_after:.2f} | {t.created_at.strftime('%d %b %Y')}"
+                for t in recent_tx
+            )
+
+        # Active delivery info
+        active_delivery_line = ""
+        if driver.current_order_id:
+            active_delivery_line = f"\nCurrently delivering order: #{driver.current_order_id[-8:].upper()}"
+
+        return f"""
+=== THIS USER IS ALSO A DRIVER ===
+Name          : {driver.full_name}
+Status        : {status_label}
+Availability  : {availability}
+Vehicle       : {driver.vehicle_type.value.capitalize()}
+Rating        : {driver.rating:.1f} / 5.0  ({driver.total_ratings} ratings)
+Total deliveries: {driver.total_deliveries}
+Wallet balance  : R{driver.wallet_balance:.2f}
+Total earned    : R{driver.total_earned:.2f}
+Total withdrawn : R{driver.total_withdrawn:.2f}{active_delivery_line}{tx_lines}
+
+DRIVER BEHAVIOUR RULES:
+- Address them as a driver when relevant, e.g. "As a driver, your balance is..."
+- Help them understand their wallet, earnings, and delivery stats
+- If they ask about going online/offline, explain they can do that in the Driver Dashboard
+- If status is "pending", remind them approval takes up to 24 hours
+- If status is "rejected" or "suspended", direct them to contact support
+- If they ask about withdrawals, minimum is R50 and processing takes 24–48 hours
+- You can reference their exact balance and delivery count from above
+- Still help them with customer questions too — drivers order food as well
+"""
+    except Exception as e:
+        logger.warning(f"Driver block build failed for user {user_id}: {e}")
+        return ""
+
+
 # ── System Prompt ──────────────────────────────────────────────────────────
 async def build_system_prompt(user: User, order_id: Optional[str] = None) -> str:
- 
-    # 1. Business hours status
+
+    # Business hours
     hours_status = get_status()
     if hours_status["is_open"]:
         hours_block = (
@@ -81,7 +146,8 @@ async def build_system_prompt(user: User, order_id: Optional[str] = None) -> str
         hours_block = (
             f"DELIVERY STATUS: CLOSED — {hours_status['message']}"
         )
-    # 1. Menu
+
+    # Menu
     try:
         items = await MenuItem.find_all().to_list(length=60)
         menu_text = "\n".join(
@@ -92,7 +158,7 @@ async def build_system_prompt(user: User, order_id: Optional[str] = None) -> str
     except Exception:
         menu_text = "(Menu unavailable)"
 
-    # 2. Active order context
+    # Active order context
     order_block = ""
     if order_id:
         try:
@@ -116,7 +182,7 @@ Cancellable: {"YES (status is still " + status_val + ")" if can_cancel else "NO 
         except Exception as e:
             logger.warning(f"Active order fetch failed: {e}")
 
-    # 3. Order history
+    # Order history
     history_block = ""
     try:
         recent = await Order.find(Order.user_id == str(user.id)).to_list(length=10)
@@ -142,6 +208,9 @@ Cancellable: {"YES (status is still " + status_val + ")" if can_cancel else "NO 
     except Exception as e:
         logger.warning(f"Order history fetch failed: {e}")
 
+    # Driver block — injected if this user is also a driver
+    driver_block = await _build_driver_block(str(user.id))
+
     phone = getattr(user, "phone", None) or "Not on file"
 
     return f"""You are KotaBot, the friendly AI assistant for KotaBites — Johannesburg south's favourite kota delivery service.
@@ -152,17 +221,19 @@ Your goals:
 3. Accept suggestions, compliments and complaints
 4. Answer general questions about KotaBites
 5. Help customers cancel orders that are still cancellable
-6. Do Not take orders. Guide them through the app https://foodsorder.vercel.app/menu 
+6. Do Not take orders. Guide them through the app https://foodsorder.vercel.app/menu
 7. You are built in this website app https://foodsorder.vercel.app
 8. Add basic words from SiSwati in the conversations
-9. Change language choose only one if user request it: SiSwati, English 
+9. Change language choose only one if user request it: SiSwati, English
+10. If the user is a driver (see driver block below), also help them with their earnings, stats and delivery questions
+
 === {hours_block} ===
- 
+
 DELIVERY SCHEDULE:
 - Monday to Friday: 09:00 – 17:00 (SAST)
 - Saturday: 09:00 – 14:00 (SAST)
 - Sunday: CLOSED
- 
+
 If delivery is currently CLOSED, politely tell the user we are closed and when we next open.
 If a user tries to order while closed, explain we cannot take orders right now and give the next opening time.
 
@@ -171,7 +242,7 @@ If a user tries to order while closed, explain we cannot take orders right now a
 
 === ORDER STATUSES ===
 pending   - Waiting for payment confirmation   [CAN cancel]
-paid      - Payment done, kitchen starting     [CAN cancel and cancelation fee R6.50]
+paid      - Payment done, kitchen starting     [CAN cancel, cancellation fee R6.50]
 preparing - Being cooked right now             [CANNOT cancel]
 ready     - Ready for delivery                 [CANNOT cancel]
 delivered - Successfully delivered             [CANNOT cancel]
@@ -179,14 +250,14 @@ cancelled - Order was cancelled
 
 {order_block}
 {history_block}
-
+{driver_block}
 === CUSTOMER ===
 Name : {user.full_name}
 Email: {user.email}
 Phone: {phone}
 
 === CANCELLATION RULES ===
-- ONLY cancel when status is "pending" or "paid" fees charge apply
+- ONLY cancel when status is "pending" or "paid" — fees apply
 - Once "preparing", "ready", or "delivered" — no cancellation possible
 - ALWAYS ask for confirmation first: "Are you sure you want to cancel order #XXXXXXXX?"
 - Only after the customer confirms YES, embed this exact tag in your reply:
@@ -196,13 +267,13 @@ Phone: {phone}
 
 === BEHAVIOUR ===
 - Be warm, helpful and concise (max 5 short paragraphs)
-- Use proper kasi slang naturally: sho, lekker, eish, ayt, Ola , ohk, yoh, hayibo, shame, no stress, straight talk, quick-quick, tight, my bad, apologize, vibes
+- Use proper kasi slang naturally: sho, lekker, eish, ayt, Ola, ohk, yoh, hayibo, shame, no stress, straight talk, quick-quick, tight, my bad, vibes
 - NEVER invent prices or menu items not listed above
 - When customer mentions an order ID, look in history and explain the status
-- Thank people warmly for feedback and confirm "I’ve noted it, sho"
+- Thank people warmly for feedback and confirm "I've noted it, sho"
 - If order not in history, ask nicely for the full 24-char order ID
-- Keep it real — talk like you’re from the hood, but still professional
-- End with something friendly like "Lekker/great day ahead" or "Hit me anytime, ayt?
+- Keep it real — talk like you're from the hood, but still professional
+- End with something friendly like "Lekker day ahead" or "Hit me anytime, ayt?"
 """
 
 
@@ -223,11 +294,9 @@ def _to_openrouter_messages(messages: List[ChatMessage]) -> List[dict]:
         for m in trimmed
     ]
 
-    # Gemini/OpenAI: first message must be from the user
     while result and result[0]["role"] == "assistant":
         result.pop(0)
 
-    # Collapse back-to-back same-role messages
     deduped: List[dict] = []
     for turn in result:
         if deduped and deduped[-1]["role"] == turn["role"]:
@@ -239,13 +308,11 @@ def _to_openrouter_messages(messages: List[ChatMessage]) -> List[dict]:
 
 
 def _extract_cancel_id(reply: str) -> Optional[str]:
-    """Return the 24-char order ID if KotaBot embedded a [CANCEL_ORDER:...] tag."""
     match = re.search(r"\[CANCEL_ORDER:([0-9a-fA-F]{24})\]", reply)
     return match.group(1) if match else None
 
 
 async def _execute_cancel(order_id: str, user: User) -> dict:
-    """Cancel an order — shared by /chat auto-cancel and /cancel-order endpoint."""
     try:
         order = await Order.get(order_id)
     except Exception:
@@ -266,12 +333,10 @@ async def _execute_cancel(order_id: str, user: User) -> dict:
 
 
 async def _maybe_save_suggestion(messages: List[ChatMessage], user: User) -> None:
-    """Auto-detect and save customer feedback."""
     last = next((m.content for m in reversed(messages) if m.role == "user"), "")
     if not any(kw in last.lower() for kw in SUGGESTION_KEYWORDS):
         return
 
-    # Quick AI classification
     category, sentiment = "general", "neutral"
     if client:
         try:
@@ -319,7 +384,6 @@ async def ai_chat(
     req: ChatRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """Non-streaming KotaBot chat — Kimi K2.5 via OpenRouter."""
     if not client:
         raise HTTPException(503, "AI service not configured — add KIMI_API_KEY to .env")
 
@@ -342,12 +406,10 @@ async def ai_chat(
         if not reply:
             reply = "Eish, I couldn't generate a reply right now. Please try again!"
 
-        # ── Auto-execute cancel if KotaBot embedded a [CANCEL_ORDER:...] tag ──
         cancel_id = _extract_cancel_id(reply)
         cancel_result: Optional[dict] = None
 
         if cancel_id:
-            # Strip the tag from the visible reply
             reply = re.sub(r"\[CANCEL_ORDER:[0-9a-fA-F]{24}\]", "", reply).strip()
             cancel_result = await _execute_cancel(cancel_id, current_user)
             logger.info(f"Auto-cancel result for {cancel_id}: {cancel_result}")
@@ -369,7 +431,6 @@ async def ai_chat_stream(
     req: ChatRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """SSE streaming KotaBot — natively async via OpenAI SDK."""
     if not client:
         raise HTTPException(503, "AI service not configured — add KIMI_API_KEY to .env")
 
@@ -410,10 +471,6 @@ async def cancel_order_endpoint(
     body: CancelOrderRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Direct cancel endpoint — called by the frontend confirm button.
-    Rules: only pending/paid orders, only the order owner.
-    """
     result = await _execute_cancel(body.order_id, current_user)
 
     if not result["success"]:
@@ -422,7 +479,7 @@ async def cancel_order_endpoint(
             raise HTTPException(404, reason)
         if "only cancel your own" in reason.lower():
             raise HTTPException(403, reason)
-        raise HTTPException(409, reason)   # already preparing/delivered etc.
+        raise HTTPException(409, reason)
 
     logger.info(
         f"Order {body.order_id} cancelled via /cancel-order by {current_user.email}"
@@ -441,7 +498,6 @@ async def save_suggestion(
     body: SuggestionRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """Directly submit a suggestion or piece of feedback."""
     try:
         await Suggestion(
             user_id=str(current_user.id),
@@ -459,7 +515,6 @@ async def save_suggestion(
 
 @router.get("/suggestions")
 async def get_suggestions(current_user: User = Depends(get_current_user)):
-    """Admin: all suggestions with sentiment breakdown."""
     try:
         suggestions = await Suggestion.find_all().to_list(length=500)
         summary = {"positive": 0, "neutral": 0, "negative": 0}
