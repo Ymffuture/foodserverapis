@@ -1,13 +1,4 @@
 # routes/delivery.py
-"""
-Delivery Driver & Wallet Management Routes
-
-Endpoints:
-- Driver signup and profile management
-- Admin approval workflow
-- Wallet operations (balance, withdrawals, transactions)
-- Order assignments and tracking
-"""
 
 import logging
 import uuid
