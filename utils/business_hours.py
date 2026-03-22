@@ -13,7 +13,7 @@ HOURS = {
     3: ("09:00", "17:00"),   # Thursday
     4: ("09:00", "17:00"),   # Friday
     5: ("09:00", "14:00"),   # Saturday (5 hours)
-    6: None,                  # Sunday — closed
+    6: ("09:00", "20:00") ,                  # Sunday — closed
 }
 
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
