@@ -17,6 +17,8 @@ class User(Document):
     # Password reset
     reset_token:         Optional[str] = None
     reset_token_expires: Optional[datetime] = None
+    # Admin
+    is_admin: bool = False
 
     class Settings:
         name = "users"
