@@ -23,13 +23,17 @@ class Order(Document):
     items: List[OrderItem] = []
     total_amount: float
     status: OrderStatus = OrderStatus.PENDING
-    payment_method: Optional[str] = "paystack"
+    payment_method: Optional[str] = "paystack"   # "cash" | "paystack"
     payment_reference: Optional[str] = None
     delivery_address: str
     phone: Optional[str] = None
-    delivery_fee: Optional[float] = None   # ✅ ADD THIS
+    # ✅ FIX: delivery_fee was missing from the model entirely.
+    # get_available_orders and accept_order both do `order.delivery_fee or 15.0`
+    # which raised AttributeError, causing a 500 the moment any READY order existed.
+    # That crash is why the driver dashboard always showed "no orders available"
+    # even when orders had been marked Ready by the admin.
+    delivery_fee: Optional[float] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
-    
- class Settings:
+    class Settings:
         name = "orders"
