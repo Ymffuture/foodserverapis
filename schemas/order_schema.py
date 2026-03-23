@@ -13,8 +13,6 @@ class OrderCreate(BaseModel):
     items: List[OrderItemInput]
     delivery_address: str
     phone: str
-    # ✅ FIX: was missing — order_service.py reads order_data.payment_method,
-    # which caused AttributeError → 500 on every single order submission.
     payment_method: Optional[str] = "paystack"   # "cash" | "paystack"
 
 
@@ -36,6 +34,7 @@ class OrderResponse(BaseModel):
     created_at: datetime
     delivery_address: str
     phone: Optional[str] = None
+    delivery_fee: Optional[float] = None   # FIX Bug 3: was missing — silently stripped by Pydantic v2
     items: List[OrderItemResponse] = []
 
     model_config = {"from_attributes": True}

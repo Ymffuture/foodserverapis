@@ -1,5 +1,5 @@
 # schemas/delivery_schema.py
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
 
@@ -33,6 +33,10 @@ class DriverSignupResponse(BaseModel):
 # ── Driver Profile ─────────────────────────────────────────────────────────
 
 class DriverProfileResponse(BaseModel):
+    # FIX Bug 4: missing model_config caused model_validate(driver) to fail
+    # because Pydantic v2 won't read attributes from ORM/Beanie objects without it.
+    model_config = {"from_attributes": True}
+
     id: str
     email: str
     full_name: str

@@ -17,9 +17,10 @@ class MenuItemCreate(MenuItemBase):
 class MenuItemResponse(MenuItemBase):
     id: str
     image_url: Optional[str] = None
-    
-    class Config:
-        from_attributes = True
+    is_available: bool = True   # FIX Bug 10: was missing — admin panel couldn't see toggle state
+
+    # FIX Bug 13: replaced Pydantic v1 `class Config` with v2 model_config
+    model_config = {"from_attributes": True}
 
 
 class CategoryResponse(BaseModel):
