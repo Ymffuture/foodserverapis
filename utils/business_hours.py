@@ -6,14 +6,15 @@ SAST_OFFSET = timedelta(hours=2)
 SAST = timezone(SAST_OFFSET)
 
 # Business hours (24h format)
+# None = closed all day
 HOURS = {
     0: ("09:00", "17:00"),   # Monday
     1: ("09:00", "17:00"),   # Tuesday
     2: ("09:00", "17:00"),   # Wednesday
     3: ("09:00", "17:00"),   # Thursday
     4: ("09:00", "17:00"),   # Friday
-    5: ("09:00", "14:00"),   # Saturday (5 hours)
-    6: ("09:00", "20:00") ,                  # Sunday — closed
+    5: ("09:00", "14:00"),   # Saturday
+    6: None,                 # Sunday — CLOSED (was wrongly set to ("09:00","20:00"))
 }
 
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -40,6 +41,8 @@ def get_status() -> dict:
 
     if hours is None:
         # Find next open day
+        next_day  = None
+        next_open = None
         for delta in range(1, 8):
             next_wd = (weekday + delta) % 7
             if HOURS.get(next_wd) is not None:
@@ -52,7 +55,7 @@ def get_status() -> dict:
             "open_time":  None,
             "close_time": None,
             "now_sast":   now_sast.strftime("%H:%M"),
-            "message":    f"Closed today (Sunday). We reopen {next_day} at {next_open}.",
+            "message":    f"Closed today ({DAY_NAMES[weekday]}). We reopen {next_day} at {next_open}.",
             "schedule":   schedule,
         }
 
