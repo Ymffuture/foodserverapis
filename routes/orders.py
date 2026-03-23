@@ -25,6 +25,7 @@ def _serialize(order: Order) -> dict:
         "created_at":        order.created_at,
         "delivery_address":  order.delivery_address,
         "phone":             order.phone,
+        "delivery_fee":      order.delivery_fee,
         "items": [
             {
                 "menu_item_id": item.menu_item_id,

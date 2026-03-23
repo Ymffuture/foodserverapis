@@ -36,6 +36,15 @@ from services.cloudinary_service import upload_image
 router = APIRouter(prefix="/delivery", tags=["Delivery"])
 logger = logging.getLogger(__name__)
 
+# ✅ FIX: Statuses that are permitted to toggle availability.
+# Previously only DriverStatus.APPROVED was allowed, which blocked drivers
+# whose status had been set to ACTIVE or OFFLINE from ever going online.
+ONLINE_ELIGIBLE_STATUSES = {
+    DriverStatus.APPROVED,
+    DriverStatus.ACTIVE,
+    DriverStatus.OFFLINE,
+}
+
 
 # ── Helper Functions ───────────────────────────────────────────────────────
 
@@ -222,7 +231,10 @@ async def toggle_availability(
     if not driver:
         raise HTTPException(404, "Driver profile not found")
 
-    if driver.status != DriverStatus.APPROVED:
+    # ✅ FIX: was `driver.status != DriverStatus.APPROVED` — too strict.
+    # Drivers with status ACTIVE or OFFLINE were blocked from toggling,
+    # even though those are valid post-approval states.
+    if driver.status not in ONLINE_ELIGIBLE_STATUSES:
         raise HTTPException(403, f"Cannot change availability. Status: {driver.status.value}")
 
     driver.is_available = body.is_available
@@ -398,7 +410,7 @@ async def request_withdrawal(
     if not driver:
         raise HTTPException(404, "Driver profile not found")
 
-    if driver.status != DriverStatus.APPROVED:
+    if driver.status not in ONLINE_ELIGIBLE_STATUSES and driver.status != DriverStatus.APPROVED:
         raise HTTPException(403, "Only approved drivers can withdraw")
 
     if body.amount > driver.wallet_balance:
@@ -498,7 +510,11 @@ async def get_available_orders(current_user: User = Depends(get_current_user)):
                 customer_name=customer.full_name if customer else "Customer",
                 delivery_address=order.delivery_address,
                 total_amount=order.total_amount,
-                delivery_fee=order.delivery_fee or 15.0,  # fallback
+                # ✅ FIX: order.delivery_fee previously raised AttributeError because
+                # the field didn't exist on the Order model — causing a 500 on every
+                # call to this endpoint whenever READY orders existed. Now that the
+                # field exists, this fallback only kicks in for old orders without it.
+                delivery_fee=order.delivery_fee or 15.0,
                 distance_km=None,  # TODO: implement real calculation
                 created_at=order.created_at,
             )
@@ -550,6 +566,7 @@ async def accept_order(
         customer_name=customer.full_name if customer else "Customer",
         customer_phone=order.phone or (customer.phone if customer else ""),
         delivery_address=order.delivery_address,
+        # ✅ FIX: same delivery_fee fallback as above
         delivery_fee=order.delivery_fee or 15.0,
         status=AssignmentStatus.ACCEPTED,
         accepted_at=datetime.utcnow(),
