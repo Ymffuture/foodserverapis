@@ -5,9 +5,8 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
-from pydantic import EmailStr
 
-from dependencies import get_current_user, get_current_admin_user  # ← Add this dependency
+from dependencies import get_current_user, get_current_admin_user
 from models.user import User
 from models.delivery_driver import DeliveryDriver, DriverStatus, VehicleType
 from models.wallet_transaction import WalletTransaction, TransactionType, TransactionStatus
@@ -36,9 +35,7 @@ from services.cloudinary_service import upload_image
 router = APIRouter(prefix="/delivery", tags=["Delivery"])
 logger = logging.getLogger(__name__)
 
-# ✅ FIX: Statuses that are permitted to toggle availability.
-# Previously only DriverStatus.APPROVED was allowed, which blocked drivers
-# whose status had been set to ACTIVE or OFFLINE from ever going online.
+# Statuses that are permitted to toggle availability and request withdrawals.
 ONLINE_ELIGIBLE_STATUSES = {
     DriverStatus.APPROVED,
     DriverStatus.ACTIVE,
@@ -219,7 +216,9 @@ async def update_driver_profile(
     driver.updated_at = datetime.utcnow()
     await driver.save()
 
-    return DriverProfileResponse.from_orm(driver)  # or manually as before
+    # FIX Bug 2: from_orm() was removed in Pydantic v2 — use model_validate() instead.
+    # Also requires model_config = {"from_attributes": True} on DriverProfileResponse (fixed in schema).
+    return DriverProfileResponse.model_validate(driver)
 
 
 @router.post("/toggle-availability")
@@ -231,9 +230,6 @@ async def toggle_availability(
     if not driver:
         raise HTTPException(404, "Driver profile not found")
 
-    # ✅ FIX: was `driver.status != DriverStatus.APPROVED` — too strict.
-    # Drivers with status ACTIVE or OFFLINE were blocked from toggling,
-    # even though those are valid post-approval states.
     if driver.status not in ONLINE_ELIGIBLE_STATUSES:
         raise HTTPException(403, f"Cannot change availability. Status: {driver.status.value}")
 
@@ -295,14 +291,12 @@ async def approve_driver(
         driver.approval_date = datetime.utcnow()
         driver.approved_by = str(admin_user.id)
         message = f"Driver {driver.full_name} approved"
-        # TODO: send approval email/notification
     else:
         if not body.reason:
             raise HTTPException(422, "Rejection reason required")
         driver.status = DriverStatus.REJECTED
         driver.rejected_reason = body.reason
         message = f"Driver {driver.full_name} rejected: {body.reason}"
-        # TODO: send rejection email
 
     driver.updated_at = datetime.utcnow()
     await driver.save()
@@ -410,7 +404,9 @@ async def request_withdrawal(
     if not driver:
         raise HTTPException(404, "Driver profile not found")
 
-    if driver.status not in ONLINE_ELIGIBLE_STATUSES and driver.status != DriverStatus.APPROVED:
+    # FIX Bug 5 (redundant guard): ONLINE_ELIGIBLE_STATUSES already contains APPROVED,
+    # so the old `and driver.status != DriverStatus.APPROVED` was unreachable dead code.
+    if driver.status not in ONLINE_ELIGIBLE_STATUSES:
         raise HTTPException(403, "Only approved drivers can withdraw")
 
     if body.amount > driver.wallet_balance:
@@ -510,12 +506,8 @@ async def get_available_orders(current_user: User = Depends(get_current_user)):
                 customer_name=customer.full_name if customer else "Customer",
                 delivery_address=order.delivery_address,
                 total_amount=order.total_amount,
-                # ✅ FIX: order.delivery_fee previously raised AttributeError because
-                # the field didn't exist on the Order model — causing a 500 on every
-                # call to this endpoint whenever READY orders existed. Now that the
-                # field exists, this fallback only kicks in for old orders without it.
                 delivery_fee=order.delivery_fee or 15.0,
-                distance_km=None,  # TODO: implement real calculation
+                distance_km=None,
                 created_at=order.created_at,
             )
         )
@@ -566,7 +558,6 @@ async def accept_order(
         customer_name=customer.full_name if customer else "Customer",
         customer_phone=order.phone or (customer.phone if customer else ""),
         delivery_address=order.delivery_address,
-        # ✅ FIX: same delivery_fee fallback as above
         delivery_fee=order.delivery_fee or 15.0,
         status=AssignmentStatus.ACCEPTED,
         accepted_at=datetime.utcnow(),

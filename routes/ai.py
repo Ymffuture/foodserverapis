@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from openai import AsyncOpenAI
 
-from dependencies import get_current_user
+from dependencies import get_current_user, get_current_admin_user
 from models.user import User
 from models.order import Order
 from models.menu import MenuItem
@@ -88,7 +88,6 @@ async def _build_driver_block(user_id: str) -> str:
 
         availability = "Online (accepting orders)" if driver.is_available else "Offline"
 
-        # Last 5 transactions
         recent_tx = await WalletTransaction.find(
             WalletTransaction.driver_id == str(driver.id)
         ).sort("-created_at").limit(5).to_list()
@@ -101,7 +100,6 @@ async def _build_driver_block(user_id: str) -> str:
                 for t in recent_tx
             )
 
-        # Active delivery info
         active_delivery_line = ""
         if driver.current_order_id:
             active_delivery_line = f"\nCurrently delivering order: #{driver.current_order_id[-8:].upper()}"
@@ -136,7 +134,6 @@ DRIVER BEHAVIOUR RULES:
 # ── System Prompt ──────────────────────────────────────────────────────────
 async def build_system_prompt(user: User, order_id: Optional[str] = None) -> str:
 
-    # Business hours
     hours_status = get_status()
     if hours_status["is_open"]:
         hours_block = (
@@ -147,7 +144,6 @@ async def build_system_prompt(user: User, order_id: Optional[str] = None) -> str
             f"DELIVERY STATUS: CLOSED — {hours_status['message']}"
         )
 
-    # Menu
     try:
         items = await MenuItem.find_all().to_list(length=60)
         menu_text = "\n".join(
@@ -158,7 +154,6 @@ async def build_system_prompt(user: User, order_id: Optional[str] = None) -> str
     except Exception:
         menu_text = "(Menu unavailable)"
 
-    # Active order context
     order_block = ""
     if order_id:
         try:
@@ -182,7 +177,6 @@ Cancellable: {"YES (status is still " + status_val + ")" if can_cancel else "NO 
         except Exception as e:
             logger.warning(f"Active order fetch failed: {e}")
 
-    # Order history
     history_block = ""
     try:
         recent = await Order.find(Order.user_id == str(user.id)).to_list(length=10)
@@ -208,9 +202,7 @@ Cancellable: {"YES (status is still " + status_val + ")" if can_cancel else "NO 
     except Exception as e:
         logger.warning(f"Order history fetch failed: {e}")
 
-    # Driver block — injected if this user is also a driver
     driver_block = await _build_driver_block(str(user.id))
-
     phone = getattr(user, "phone", None) or "Not on file"
 
     return f"""You are KotaBot, the friendly AI assistant for KotaBites — Johannesburg south's favourite kota delivery service.
@@ -514,7 +506,11 @@ async def save_suggestion(
 
 
 @router.get("/suggestions")
-async def get_suggestions(current_user: User = Depends(get_current_user)):
+async def get_suggestions(
+    # FIX Bug 8 (SECURITY): was get_current_user — any authenticated customer could
+    # read every suggestion ever submitted by any user. Changed to get_current_admin_user.
+    admin_user: User = Depends(get_current_admin_user),
+):
     try:
         suggestions = await Suggestion.find_all().to_list(length=500)
         summary = {"positive": 0, "neutral": 0, "negative": 0}
