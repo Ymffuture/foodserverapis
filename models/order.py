@@ -23,11 +23,13 @@ class Order(Document):
     items: List[OrderItem] = []
     total_amount: float
     status: OrderStatus = OrderStatus.PENDING
-    payment_method: Optional[str] = "paystack"   # "cash" | "paystack"
+    payment_method: Optional[str] = "paystack"
     payment_reference: Optional[str] = None
     delivery_address: str
     phone: Optional[str] = None
+    delivery_fee: Optional[float] = None   # ✅ ADD THIS
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
-    class Settings:
+    
+ class Settings:
         name = "orders"
