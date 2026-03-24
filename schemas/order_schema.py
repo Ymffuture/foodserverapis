@@ -13,7 +13,8 @@ class OrderCreate(BaseModel):
     items: List[OrderItemInput]
     delivery_address: str
     phone: str
-    payment_method: Optional[str] = "paystack"   # "cash" | "paystack"
+    payment_method: Optional[str] = "paystack"
+    delivery_fee: Optional[float] = 15.0
 
 
 class OrderItemResponse(BaseModel):
@@ -21,7 +22,6 @@ class OrderItemResponse(BaseModel):
     name: str
     price: float
     quantity: int
-
     model_config = {"from_attributes": True}
 
 
@@ -34,9 +34,8 @@ class OrderResponse(BaseModel):
     created_at: datetime
     delivery_address: str
     phone: Optional[str] = None
-    delivery_fee: Optional[float] = None   # FIX Bug 3: was missing — silently stripped by Pydantic v2
+    delivery_fee: Optional[float] = None
     items: List[OrderItemResponse] = []
-
     model_config = {"from_attributes": True}
 
     @field_serializer("id", when_used="always")

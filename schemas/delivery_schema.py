@@ -1,16 +1,14 @@
 # schemas/delivery_schema.py
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 
-# ── Driver Signup ──────────────────────────────────────────────────────────
-
 class DriverSignupRequest(BaseModel):
     full_name: str = Field(..., min_length=2, max_length=100)
-    phone: str = Field(..., pattern=r"^0\d{9}$")  # SA phone format
+    phone: str = Field(..., pattern=r"^0\d{9}$")
     id_number: str = Field(..., min_length=13, max_length=13)
-    vehicle_type: str  # bicycle, motorcycle, car, scooter
+    vehicle_type: str
     vehicle_registration: Optional[str] = None
     drivers_license: Optional[str] = None
     street_address: str
@@ -30,13 +28,7 @@ class DriverSignupResponse(BaseModel):
     created_at: datetime
 
 
-# ── Driver Profile ─────────────────────────────────────────────────────────
-
 class DriverProfileResponse(BaseModel):
-    # FIX Bug 4: missing model_config caused model_validate(driver) to fail
-    # because Pydantic v2 won't read attributes from ORM/Beanie objects without it.
-    model_config = {"from_attributes": True}
-
     id: str
     email: str
     full_name: str
@@ -51,6 +43,8 @@ class DriverProfileResponse(BaseModel):
     created_at: datetime
     approval_date: Optional[datetime] = None
     profile_photo_url: Optional[str] = None
+
+    model_config = {"from_attributes": True}
 
 
 class UpdateDriverProfile(BaseModel):
@@ -67,12 +61,10 @@ class ToggleAvailability(BaseModel):
     is_available: bool
 
 
-# ── Admin Approval ─────────────────────────────────────────────────────────
-
 class AdminApprovalRequest(BaseModel):
     driver_id: str
     approved: bool
-    reason: Optional[str] = None  # Required if rejected
+    reason: Optional[str] = None
 
 
 class PendingDriverResponse(BaseModel):
@@ -90,8 +82,6 @@ class PendingDriverResponse(BaseModel):
     vehicle_document_url: Optional[str] = None
     profile_photo_url: Optional[str] = None
 
-
-# ── Wallet ─────────────────────────────────────────────────────────────────
 
 class WalletBalance(BaseModel):
     balance: float
@@ -120,21 +110,27 @@ class TransactionResponse(BaseModel):
 
 class AdminAdjustment(BaseModel):
     driver_id: str
-    amount: float  # Positive = credit, Negative = debit
-    type: str  # bonus, penalty, adjustment
+    amount: float
+    type: str
     description: str
     notes: Optional[str] = None
 
 
-# ── Delivery Operations ────────────────────────────────────────────────────
-
+# ✅ FIX: Added phone, items, and payment_method.
+# The old schema only had order_id/address/total/fee/distance/created_at.
+# Pydantic silently strips any field not declared here, so even though
+# get_available_orders() was building phone/items/payment_method, they
+# were dropped before the response left the server.
 class AvailableOrderResponse(BaseModel):
     order_id: str
     short_id: str
     customer_name: str
+    phone: Optional[str] = None           # Customer contact for driver
     delivery_address: str
     total_amount: float
     delivery_fee: float
+    payment_method: Optional[str] = None  # "cash" | "paystack" — driver needs to know
+    items: List[Dict[str, Any]] = []       # [{name, quantity}] — what to collect
     distance_km: Optional[float] = None
     created_at: datetime
 
@@ -145,7 +141,7 @@ class AcceptOrderRequest(BaseModel):
 
 class UpdateDeliveryStatus(BaseModel):
     assignment_id: str
-    status: str  # accepted, picked_up, in_transit, delivered, failed
+    status: str
     notes: Optional[str] = None
 
 
