@@ -162,6 +162,9 @@ async def get_driver_profile(current_user: User = Depends(get_current_user)):
         rating=driver.rating, is_available=driver.is_available,
         created_at=driver.created_at, approval_date=driver.approval_date,
         profile_photo_url=driver.profile_photo_url,
+        bank_name=driver.bank_name,
+        account_number=driver.account_number,
+        account_holder=driver.account_holder,
     )
 
 
@@ -187,6 +190,9 @@ async def update_driver_profile(
         rating=driver.rating, is_available=driver.is_available,
         created_at=driver.created_at, approval_date=driver.approval_date,
         profile_photo_url=driver.profile_photo_url,
+        bank_name=driver.bank_name,
+        account_number=driver.account_number,
+        account_holder=driver.account_holder,
     )
 
 
