@@ -43,6 +43,12 @@ class DriverProfileResponse(BaseModel):
     created_at: datetime
     approval_date: Optional[datetime] = None
     profile_photo_url: Optional[str] = None
+    # ✅ FIX: Banking fields were missing — Pydantic stripped them from every
+    # /delivery/profile response, so Wallet.jsx always saw undefined for
+    # bank_name/account_number/account_holder → canWithdraw was always false.
+    bank_name: Optional[str] = None
+    account_number: Optional[str] = None
+    account_holder: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
