@@ -339,23 +339,137 @@ async def request_withdrawal(body: WithdrawalRequest, current_user: User = Depen
     if body.amount < 50.0:
         raise HTTPException(400, "Minimum withdrawal is R50.00")
 
-    transaction = await create_wallet_transaction(
-        driver=driver, transaction_type=TransactionType.WITHDRAWAL,
+    # Reserve the funds immediately (deducted from balance) but mark as PENDING
+    # until admin marks it paid
+    balance_before = driver.wallet_balance
+    balance_after  = balance_before - body.amount
+
+    transaction = WalletTransaction(
+        driver_id=str(driver.id),
+        driver_email=driver.email,
+        type=TransactionType.WITHDRAWAL,
         amount=-body.amount,
+        status=TransactionStatus.PENDING,   # ← PENDING until admin approves
+        balance_before=balance_before,
+        balance_after=balance_after,
+        reference=f"TXN-{uuid.uuid4().hex[:12].upper()}",
         description=f"Withdrawal to {body.bank_name} ••••{body.account_number[-4:]}",
         notes=f"Bank: {body.bank_name}, Account: {body.account_number}, Holder: {body.account_holder}",
+        bank_name=body.bank_name,
+        account_number=body.account_number,
     )
-    transaction.bank_name = body.bank_name
-    transaction.account_number = body.account_number
-    await transaction.save()
+    await transaction.insert()
+
+    driver.wallet_balance    = balance_after
+    driver.total_withdrawn  += body.amount
+    driver.updated_at        = datetime.utcnow()
+    await driver.save()
+
+    logger.info(f"Withdrawal PENDING | {driver.email} | R{body.amount:.2f}")
 
     return {
         "success": True,
-        "message": "Withdrawal request submitted. Processing within 24-48 hours.",
+        "message": "Withdrawal request submitted. Admin will process within 24-48 hours.",
         "reference": transaction.reference,
         "amount": body.amount,
         "new_balance": driver.wallet_balance,
     }
+
+
+@router.get("/admin/withdrawals")
+async def get_withdrawal_requests(
+    status: Optional[str] = "pending",
+    admin_user: User = Depends(get_current_admin_user),
+):
+    """Admin: list all driver withdrawal requests, default to pending."""
+    query = {"type": TransactionType.WITHDRAWAL.value}
+    if status and status != "all":
+        try:
+            query["status"] = TransactionStatus(status.lower()).value
+        except ValueError:
+            pass
+
+    transactions = await WalletTransaction.find(query).sort("-created_at").to_list()
+
+    result = []
+    for tx in transactions:
+        driver = await DeliveryDriver.get(tx.driver_id)
+        result.append({
+            "id":             str(tx.id),
+            "reference":      tx.reference,
+            "driver_id":      tx.driver_id,
+            "driver_name":    driver.full_name if driver else tx.driver_email,
+            "driver_email":   tx.driver_email,
+            "driver_phone":   driver.phone if driver else None,
+            "amount":         abs(tx.amount),
+            "status":         tx.status.value,
+            "bank_name":      tx.bank_name,
+            "account_number": tx.account_number,
+            "account_holder": driver.account_holder if driver else None,
+            "description":    tx.description,
+            "created_at":     tx.created_at,
+            "completed_at":   tx.completed_at,
+            "withdrawal_date":tx.withdrawal_date,
+        })
+    return result
+
+
+@router.post("/admin/withdrawals/{transaction_id}/approve")
+async def approve_withdrawal(
+    transaction_id: str,
+    admin_user: User = Depends(get_current_admin_user),
+):
+    """Admin: mark a withdrawal as paid/completed."""
+    tx = await WalletTransaction.get(transaction_id)
+    if not tx:
+        raise HTTPException(404, "Transaction not found")
+    if tx.type != TransactionType.WITHDRAWAL:
+        raise HTTPException(400, "Not a withdrawal transaction")
+    if tx.status != TransactionStatus.PENDING:
+        raise HTTPException(400, f"Transaction already {tx.status.value}")
+
+    now = datetime.utcnow()
+    tx.status          = TransactionStatus.COMPLETED
+    tx.completed_at    = now
+    tx.withdrawal_date = now
+    tx.processed_by    = str(admin_user.id)
+    await tx.save()
+
+    logger.info(f"Withdrawal {transaction_id} approved by {admin_user.email}")
+    return {"success": True, "message": "Withdrawal marked as paid.", "reference": tx.reference}
+
+
+@router.post("/admin/withdrawals/{transaction_id}/reject")
+async def reject_withdrawal(
+    transaction_id: str,
+    admin_user: User = Depends(get_current_admin_user),
+):
+    """Admin: reject a withdrawal and refund the driver's balance."""
+    tx = await WalletTransaction.get(transaction_id)
+    if not tx:
+        raise HTTPException(404, "Transaction not found")
+    if tx.type != TransactionType.WITHDRAWAL:
+        raise HTTPException(400, "Not a withdrawal transaction")
+    if tx.status != TransactionStatus.PENDING:
+        raise HTTPException(400, f"Transaction already {tx.status.value}")
+
+    # Cancel the withdrawal
+    tx.status       = TransactionStatus.CANCELLED
+    tx.completed_at = datetime.utcnow()
+    tx.processed_by = str(admin_user.id)
+    await tx.save()
+
+    # Refund the driver's wallet
+    driver = await DeliveryDriver.get(tx.driver_id)
+    if driver:
+        refund_amount       = abs(tx.amount)
+        driver.wallet_balance  += refund_amount
+        driver.total_withdrawn -= refund_amount
+        driver.updated_at       = datetime.utcnow()
+        await driver.save()
+        logger.info(f"Withdrawal {transaction_id} rejected — R{refund_amount:.2f} refunded to {driver.email}")
+
+    return {"success": True, "message": "Withdrawal rejected and balance refunded."}
 
 
 @router.post("/admin/wallet/adjust")
