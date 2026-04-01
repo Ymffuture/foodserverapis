@@ -15,6 +15,10 @@ class OrderCreate(BaseModel):
     phone: str
     payment_method: Optional[str] = "paystack"
     delivery_fee: Optional[float] = 15.0
+    # Reward code discount applied on the frontend.
+    # Backend uses this to verify total_amount and stores it on the order
+    # so it can be shown on the order status/tracking page.
+    discount: Optional[float] = 0.0
 
 
 class OrderItemResponse(BaseModel):
@@ -35,6 +39,7 @@ class OrderResponse(BaseModel):
     delivery_address: str
     phone: Optional[str] = None
     delivery_fee: Optional[float] = None
+    discount: Optional[float] = None        # ← reward discount stored on order
     items: List[OrderItemResponse] = []
     model_config = {"from_attributes": True}
 
