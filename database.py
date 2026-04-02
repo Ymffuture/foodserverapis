@@ -1,4 +1,4 @@
-# database.py  (updated — register all delivery models)
+# database.py  (updated — register RewardCode model)
 from motor.motor_asyncio import AsyncIOMotorClient
 from beanie import init_beanie
 from config import DATABASE_URL
@@ -18,9 +18,17 @@ async def init_db():
             "models.menu.MenuItem",
             "models.order.Order",
             "models.suggestion.Suggestion",
-            "models.delivery_driver.DeliveryDriver",         # ← new
-            "models.wallet_transaction.WalletTransaction",   # ← new
-            "models.delivery_assignment.DeliveryAssignment", # ← new
+            "models.delivery_driver.DeliveryDriver",
+            "models.wallet_transaction.WalletTransaction",
+            "models.delivery_assignment.DeliveryAssignment",
+            "models.reward_code.RewardCode",               # ← NEW
         ]
     )
-    print("✅ Connected to MongoDB + Beanie initialized (with delivery models)")
+
+    # Ensure the reward_codes.code field has a unique index
+    try:
+        await database["reward_codes"].create_index("code", unique=True)
+    except Exception:
+        pass  # index may already exist
+
+    print("✅ Connected to MongoDB + Beanie initialized (with rewards model)")
