@@ -13,6 +13,7 @@ import logging
 import random
 import string
 from datetime import datetime
+import secrets
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -81,9 +82,13 @@ def _to_tier_info(t: dict) -> TierInfo:
 
 
 def _generate_code() -> str:
-    """KB + 6 uppercase alphanumeric chars, e.g. KB4FX9QA"""
+    """Generate secure 24-character code, e.g. KB8F3K9X2L0QW7ZP1R5T6Y"""
+    
     chars = string.ascii_uppercase + string.digits
-    suffix = "".join(random.choices(chars, k=6))
+    
+    length = 24 - 2  # subtract prefix length ("KB")
+    suffix = "".join(secrets.choice(chars) for _ in range(length))
+    
     return f"KB{suffix}"
 
 
