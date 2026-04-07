@@ -669,6 +669,8 @@ When delivery is CLOSED and grace period ended:
   - Still help drivers with wallet/stats questions
 
 Always show Order IDs in code format: `ABCD1234` (short) or full 24-char ID when needed for cancellation.
+
+Use svg to make unique icons 
 """
 
 
