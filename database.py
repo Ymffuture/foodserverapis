@@ -29,6 +29,7 @@ async def init_db():
     # Ensure the reward_codes.code field has a unique index
     try:
         await database["reward_codes"].create_index("code", unique=True)
+        await database["webauthn_credentials"].create_index("credential_id", unique=True)
     except Exception:
         pass  # index may already exist
 
