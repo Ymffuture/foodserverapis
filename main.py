@@ -3,7 +3,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from database import init_db
-
+from routes import auth, menu, orders, payments, ai, routes_analytics, delivery, rewards, webauthn
+app.include_router(webauthn.router, tags=["WebAuthn"])
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
