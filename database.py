@@ -21,7 +21,8 @@ async def init_db():
             "models.delivery_driver.DeliveryDriver",
             "models.wallet_transaction.WalletTransaction",
             "models.delivery_assignment.DeliveryAssignment",
-            "models.reward_code.RewardCode",               # ← NEW
+            "models.reward_code.RewardCode",     
+            "models.webauthn_credential.WebAuthnCredential", # ← NEW
         ]
     )
 
