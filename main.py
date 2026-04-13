@@ -1,10 +1,10 @@
-# main.py  (updated — add rewards router)
+# main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from database import init_db
 from routes import auth, menu, orders, payments, ai, routes_analytics, delivery, rewards, webauthn
-app.include_router(webauthn.router, tags=["WebAuthn"])
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -27,16 +27,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from routes import auth, menu, orders, payments, ai, routes_analytics, delivery, rewards  # ← add rewards
-
-
 app.include_router(auth.router,             prefix="/auth",     tags=["Auth"])
 app.include_router(menu.router,             prefix="/menu",     tags=["Menu"])
 app.include_router(orders.router,           prefix="/orders",   tags=["Orders"])
 app.include_router(payments.router,         prefix="/payments", tags=["Payments"])
 app.include_router(ai.router,               prefix="/ai",       tags=["AI"])
 app.include_router(delivery.router,                             tags=["Delivery"])
-app.include_router(rewards.router,                              tags=["Rewards"])   # ← NEW
+app.include_router(rewards.router,                              tags=["Rewards"])
+app.include_router(webauthn.router,                             tags=["WebAuthn"])
 app.include_router(routes_analytics.router,                     tags=["Analytics"])
 
 
@@ -51,7 +49,8 @@ def home():
             "AI chatbot",
             "Delivery driver system",
             "Driver wallet management",
-            "Customer rewards wallet (KotaPoints)",   # ← new
+            "Customer rewards wallet (KotaPoints)",
+            "WebAuthn passkey / fingerprint login",
             "Real-time admin approval",
         ]
     }
