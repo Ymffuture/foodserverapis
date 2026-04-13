@@ -55,8 +55,8 @@ class ClaimResponse(BaseModel):
 
 
 class ValidateRequest(BaseModel):
-    code: str = Field(..., min_length=4, max_length=20)
-
+    code: str = Field(..., min_length=4, max_length=30)
+    
 
 class ValidateResponse(BaseModel):
     valid: bool
