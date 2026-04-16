@@ -1,10 +1,25 @@
 # schemas/reward_schema.py
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from typing import Optional, List
 from datetime import datetime
+from decimal import Decimal
 
 
-# ── Responses ─────────────────────────────────────────────────────────────
+# ── Base Models (Reusable) ────────────────────────────────────────────────
+
+class TimestampMixin(BaseModel):
+    created_at: datetime
+
+
+class ExpirableMixin(BaseModel):
+    expires_at: datetime
+
+    @property
+    def is_expired(self) -> bool:
+        return datetime.utcnow() > self.expires_at
+
+
+# ── Tier ──────────────────────────────────────────────────────────────────
 
 class TierInfo(BaseModel):
     name: str
@@ -12,66 +27,99 @@ class TierInfo(BaseModel):
     bg: str
     border: str
     icon: str
-    min: int
-    max: int
+    min_points: int = Field(..., ge=0)
+    max_points: int = Field(..., ge=0)
+
+    @validator("max_points")
+    def validate_range(cls, v, values):
+        if "min_points" in values and v < values["min_points"]:
+            raise ValueError("max_points must be >= min_points")
+        return v
 
 
-class RewardCodeOut(BaseModel):
+# ── Reward Code ───────────────────────────────────────────────────────────
+
+class RewardCodeOut(TimestampMixin, ExpirableMixin):
     id: str
-    code: str
-    discount: float
-    points_spent: int
+    code: str = Field(..., min_length=4, max_length=30)
+
+    discount: Decimal = Field(..., ge=0, le=100)
+    points_spent: int = Field(..., ge=0)
+
     label: str
-    used: bool
+
+    used: bool = False
     used_at: Optional[datetime] = None
-    expires_at: datetime
-    created_at: datetime
+
     applied_order_id: Optional[str] = None
+
+    # Computed flag exposed safely
     is_expired: bool = False
 
+    @validator("is_expired", always=True)
+    def compute_expired(cls, v, values):
+        expires_at = values.get("expires_at")
+        if expires_at:
+            return datetime.utcnow() > expires_at
+        return False
+
+
+# ── Wallet ────────────────────────────────────────────────────────────────
 
 class WalletResponse(BaseModel):
-    earned_points: int
-    redeemed_points: int
-    available_points: int
+    earned_points: int = Field(..., ge=0)
+    redeemed_points: int = Field(..., ge=0)
+    available_points: int = Field(..., ge=0)
+
     tier: TierInfo
     next_tier: Optional[TierInfo] = None
-    tier_progress: int                    # 0-100 %
-    order_count: int
-    codes: List[RewardCodeOut]
 
+    tier_progress: int = Field(..., ge=0, le=100)
+
+    order_count: int = Field(..., ge=0)
+
+    codes: List[RewardCodeOut] = []
+
+
+# ── Claim ─────────────────────────────────────────────────────────────────
 
 class ClaimRequest(BaseModel):
-    points: int = Field(..., gt=0)        # must match a REDEEM_OPTIONS key
+    points: int = Field(..., gt=0)
 
 
-class ClaimResponse(BaseModel):
+class ClaimResponse(ExpirableMixin):
     code: str
-    discount: float
+    discount: Decimal = Field(..., ge=0, le=100)
     label: str
     points_spent: int
-    expires_at: datetime
-    available_points: int                 # updated balance after claim
 
+    available_points: int = Field(..., ge=0)
+
+
+# ── Validation ────────────────────────────────────────────────────────────
 
 class ValidateRequest(BaseModel):
     code: str = Field(..., min_length=4, max_length=30)
-    
+
 
 class ValidateResponse(BaseModel):
     valid: bool
-    discount: Optional[float] = None
+
+    discount: Optional[Decimal] = Field(None, ge=0, le=100)
     label: Optional[str] = None
     code: Optional[str] = None
-    reason: Optional[str] = None         # why invalid
 
+    reason: Optional[str] = None
+
+
+# ── Use Code ──────────────────────────────────────────────────────────────
 
 class UseCodeRequest(BaseModel):
-    code: str
+    code: str = Field(..., min_length=4, max_length=30)
     order_id: str
 
 
 class UseCodeResponse(BaseModel):
     success: bool
     message: str
-    discount: float
+    discount: Decimal = Field(..., ge=0, le=100)
