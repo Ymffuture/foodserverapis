@@ -1,40 +1,47 @@
 # routes/reasoning.py
 """
-/ai/reasoning  — Gemini 2.5 Flash generates context-aware reasoning steps
-                 for KotaBot's thinking block UI.
+/ai/reasoning — generates context-aware reasoning steps for KotaBot's
+thinking block UI.
 
-Uses the new `google-genai` SDK (replaces deprecated `google-generativeai`).
-The blocking SDK call runs in a thread pool via asyncio.to_thread so it
-never blocks FastAPI's async event loop.
+Uses OpenRouter (KIMI_API_KEY_2) — same setup as ai.py but a separate
+API key so reasoning quota is isolated from the main chat quota.
+Falls back to keyword buckets if the key is missing or the call fails.
 """
-import asyncio
 import json
 import logging
 import os
 import re
-from typing import List
+from typing import List, Optional
 
-import google.genai as genai
-import google.genai.types as genai_types
 from fastapi import APIRouter, Depends, HTTPException
+from openai import AsyncOpenAI
 from pydantic import BaseModel
 
-from dependencies import get_current_user   # flat import — dependencies.py
+from dependencies import get_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ai", tags=["AI"])
 
-# ── Gemini client (singleton, created once at startup) ────────────────────────
-_GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-_client: genai.Client | None = None
+# ── OpenRouter client (separate key from /ai/chat) ────────────────────────────
+_API_KEY = os.getenv("KIMI_API_KEY_2")
+_MODEL   = "nvidia/nemotron-3-nano-30b-a3b:free"   # fast, free — good for short structured output
 
-if _GEMINI_KEY:
-    _client = genai.Client(api_key=_GEMINI_KEY)
-    logger.info("[reasoning] Gemini 2.5 Flash client ready")
+_client: Optional[AsyncOpenAI] = None
+
+if _API_KEY:
+    _client = AsyncOpenAI(
+        api_key=_API_KEY,
+        base_url="https://openrouter.ai/api/v1",
+        default_headers={
+            "HTTP-Referer": "https://foodsorder.vercel.app",
+            "X-Title":      "KotaBites-Reasoning",
+        },
+    )
+    logger.info("[reasoning] OpenRouter client ready (KIMI_API_KEY_2)")
 else:
-    logger.warning("[reasoning] GEMINI_API_KEY not set — keyword fallback only")
+    logger.warning("[reasoning] KIMI_API_KEY_2 not set — keyword fallback only")
 
-# ── Keyword fallback (used when Gemini is unavailable or fails) ───────────────
+# ── Keyword fallback ──────────────────────────────────────────────────────────
 _FALLBACK: dict[str, List[str]] = {
     "track": [
         "Identifying order reference in message…",
@@ -82,60 +89,31 @@ def _keyword_fallback(text: str) -> List[str]:
     return _FALLBACK["default"]
 
 
-# ── System instruction ────────────────────────────────────────────────────────
+# ── Prompt ────────────────────────────────────────────────────────────────────
 _SYSTEM = (
     "You are the internal reasoning engine for KotaBot, a South African "
     "food-ordering chatbot for KOTABITES.\n\n"
-    "Given a user message, return ONLY a JSON array of 3 to 5 short reasoning "
-    "steps KotaBot would think through before replying.\n\n"
+    "Given the user message, return ONLY a raw JSON array of 3 to 5 short "
+    "reasoning steps that KotaBot would think through before replying.\n\n"
     "Rules:\n"
     "- Each step max 9 words, ending with '…'\n"
-    "- Specific to THIS exact message — no generic filler\n"
+    "- Must be specific to THIS message — no generic filler\n"
     "- Active present-tense verbs: Checking…, Verifying…, Scanning…, Fetching…\n"
-    "- If message contains a 24-char hex order ID, reference it in one step\n"
-    "- Return ONLY a raw JSON array — no markdown, no explanation, nothing else\n\n"
+    "- If message has a 24-char hex order ID, reference it in one step\n"
+    "- Return ONLY the JSON array — no markdown, no explanation, nothing else\n\n"
     'Example: ["Identifying order ID in message…","Querying delivery records…",'
     '"Checking estimated arrival window…","Formatting status update…"]'
 )
 
-# ── Gemini call config ────────────────────────────────────────────────────────
-_GEN_CONFIG = genai_types.GenerateContentConfig(
-    temperature=0.2,
-    max_output_tokens=200,
-    response_mime_type="application/json",
-    response_schema=list[str],          # new SDK accepts Python type hints directly
-    system_instruction=_SYSTEM,
-)
 
-
-# ── Sync call (runs in thread pool, never blocks event loop) ──────────────────
-def _call_gemini_sync(user_message: str) -> List[str]:
-    assert _client is not None
-
-    response = _client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=user_message,
-        config=_GEN_CONFIG,
-    )
-
-    raw   = response.text.strip()
-    clean = re.sub(r"```json|```", "", raw, flags=re.IGNORECASE).strip()
-    steps = json.loads(clean)
-
-    if not isinstance(steps, list) or not (2 <= len(steps) <= 6):
-        raise ValueError(f"Unexpected shape from Gemini: {steps!r}")
-
-    return [str(s) for s in steps]
-
-
-# ── Pydantic schemas ──────────────────────────────────────────────────────────
+# ── Schemas ───────────────────────────────────────────────────────────────────
 class ReasoningRequest(BaseModel):
     message: str
 
 
 class ReasoningResponse(BaseModel):
     steps:  List[str]
-    source: str   # "gemini" | "fallback"
+    source: str    # "openrouter" | "fallback"
 
 
 # ── Endpoint ──────────────────────────────────────────────────────────────────
@@ -147,15 +125,36 @@ async def get_reasoning(
     if not body.message.strip():
         raise HTTPException(status_code=422, detail="message cannot be empty")
 
-    user_text = body.message.strip()[:500]   # hard cap — abuse prevention
+    user_text = body.message.strip()[:500]   # hard cap
 
     if _client:
         try:
-            steps = await asyncio.to_thread(_call_gemini_sync, user_text)
-            logger.info(f"[reasoning] Gemini 2.5 Flash OK — {len(steps)} steps for: {user_text[:60]}")
-            return ReasoningResponse(steps=steps, source="gemini")
+            response = await _client.chat.completions.create(
+                model=_MODEL,
+                messages=[
+                    {"role": "system", "content": _SYSTEM},
+                    {"role": "user",   "content": user_text},
+                ],
+                temperature=0.2,
+                max_tokens=180,
+                extra_body={"thinking": {"type": "disabled"}},
+            )
+
+            raw   = (response.choices[0].message.content or "").strip()
+            clean = re.sub(r"```json|```", "", raw, flags=re.IGNORECASE).strip()
+            steps = json.loads(clean)
+
+            if isinstance(steps, list) and 2 <= len(steps) <= 6:
+                logger.info(f"[reasoning] OpenRouter OK — {len(steps)} steps")
+                return ReasoningResponse(
+                    steps=[str(s) for s in steps],
+                    source="openrouter",
+                )
+
+            logger.warning(f"[reasoning] bad shape: {steps!r} — using fallback")
+
         except Exception as exc:
-            logger.warning(f"[reasoning] Gemini failed ({exc.__class__.__name__}: {exc}) — using fallback")
+            logger.warning(f"[reasoning] OpenRouter failed ({exc.__class__.__name__}: {exc}) — using fallback")
 
     steps = _keyword_fallback(user_text)
     logger.info(f"[reasoning] keyword fallback — {len(steps)} steps")
