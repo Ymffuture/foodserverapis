@@ -4,9 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from database import init_db
 from routes import auth, menu, orders, payments, ai, routes_analytics, delivery, rewards, webauthn
-from routers.reasoning import router as reasoning_router
+from routes.reasoning import router as reasoning_router   # ← correct path: routes/ not routers/
 
-app.include_router(reasoning_router, prefix="/api")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -34,6 +33,7 @@ app.include_router(menu.router,             prefix="/menu",     tags=["Menu"])
 app.include_router(orders.router,           prefix="/orders",   tags=["Orders"])
 app.include_router(payments.router,         prefix="/payments", tags=["Payments"])
 app.include_router(ai.router,               prefix="/ai",       tags=["AI"])
+app.include_router(reasoning_router)                            # prefix="/ai" already set in router
 app.include_router(delivery.router,                             tags=["Delivery"])
 app.include_router(rewards.router,                              tags=["Rewards"])
 app.include_router(webauthn.router,                             tags=["WebAuthn"])
@@ -49,6 +49,7 @@ def home():
             "Menu management",
             "Order tracking",
             "AI chatbot",
+            "AI reasoning (Gemini 2.5 Flash)",
             "Delivery driver system",
             "Driver wallet management",
             "Customer rewards wallet (KotaPoints)",
