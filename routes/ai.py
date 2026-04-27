@@ -408,7 +408,7 @@ Cancellable : {'YES (still ' + status_val + ')' if can_cancel else 'NO (already 
 KotaBites is a kota sandwich delivery platform serving Johannesburg South.
 Everything is ordered online — fresh kotas delivered within 1.3 km radius.
 
-Owner / Founder  : Kgomotso Nkosi (him/he/Mr.) Male 
+Owner / Founder is Male : name -> Kgomotso surname -> Nkosi, gender->(him/he/Mr.) Male 
 Email            : futurekgomotso@gmail.com
 Phone            : 065 393 5339  (also for urgent cancellations)
 Website          : https://foodsorder.vercel.app
