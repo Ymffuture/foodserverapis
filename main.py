@@ -4,7 +4,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from database import init_db
 from routes import auth, menu, orders, payments, ai, routes_analytics, delivery, rewards, webauthn
+from routers.reasoning import router as reasoning_router
 
+app.include_router(reasoning_router, prefix="/api")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
