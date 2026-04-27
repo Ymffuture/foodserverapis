@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ai", tags=["AI"])
 
 # ── OpenRouter client (separate key from /ai/chat) ────────────────────────────
-_API_KEY = os.getenv("KIMI_API_KEY_2")
+_API_KEY = os.getenv("KIMI_API_KEY")
 _MODEL   = "nvidia/nemotron-3-super-120b-a12b:free"   # fast, free — good for short structured output
 
 _client: Optional[AsyncOpenAI] = None
@@ -39,7 +39,7 @@ if _API_KEY:
     )
     logger.info("[reasoning] OpenRouter client ready (KIMI_API_KEY_2)")
 else:
-    logger.warning("[reasoning] KIMI_API_KEY_2 not set — keyword fallback only")
+    logger.warning("[reasoning] KIMI_API_KEY not set — keyword fallback only")
 
 # ── Keyword fallback ──────────────────────────────────────────────────────────
 _FALLBACK: dict[str, List[str]] = {
