@@ -32,7 +32,7 @@ logger.setLevel(logging.INFO)
 
 # ── OpenRouter Setup ───────────────────────────────────────────────────────
 KIMI_API_KEY = os.getenv("KIMI_API_KEY")
-MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
+MODEL = "nvidia/nemotron-3-nano-30b-a3b:free"
 
 client: Optional[AsyncOpenAI] = None
 if KIMI_API_KEY:
