@@ -24,7 +24,7 @@ router = APIRouter(prefix="/ai", tags=["AI"])
 
 # ── OpenRouter client (separate key from /ai/chat) ────────────────────────────
 _API_KEY = os.getenv("KIMI_API_KEY_2")
-_MODEL   = "nvidia/nemotron-3-nano-30b-a3b:free"   # fast, free — good for short structured output
+_MODEL   = "nvidia/nemotron-3-super-120b-a12b:free"   # fast, free — good for short structured output
 
 _client: Optional[AsyncOpenAI] = None
 
