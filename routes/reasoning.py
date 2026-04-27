@@ -1,132 +1,205 @@
-# routes/reasoning.py
+# routes/reasoning.py (ADVANCED)
+
+import asyncio
 import json
 import logging
 import os
 import re
+import hashlib
 from typing import List, Optional
 
+import google.genai as genai
+import google.genai.types as genai_types
 from fastapi import APIRouter, Depends, HTTPException
-from openai import AsyncOpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from dependencies import get_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ai", tags=["AI"])
 
-# ── Client ────────────────────────────────────────────────────────────────────
-_API_KEY = os.getenv("KIMI_API_KEY")
-_MODEL   = "nvidia/nemotron-3-super-120b-a12b:free"
 
-_client: Optional[AsyncOpenAI] = None
-if _API_KEY:
-    _client = AsyncOpenAI(
-        api_key=_API_KEY,
-        base_url="https://openrouter.ai/api/v1",
-        default_headers={
-            "HTTP-Referer": "https://foodsorder.vercel.app",
-            "X-Title": "KotaBites-Reasoning",
-        },
-    )
-    logger.info("[reasoning] client ready")
-else:
-    logger.warning("[reasoning] KIMI_API_KEY not set — keyword fallback only")
+# ── Config ──────────────────────────────────────────────────────────────────
+TIMEOUT_SECONDS = 3.0
+CACHE_TTL = 60  # seconds (simple in-memory)
 
-# ── Keyword fallback ──────────────────────────────────────────────────────────
-_FALLBACK = {
-    "track":    ["Identifying order reference…", "Querying order records…", "Fetching delivery status…", "Formatting result…"],
-    "cancel":   ["Parsing cancellation intent…", "Verifying order ID…", "Checking eligibility window…", "Preparing confirmation…"],
-    "menu":     ["Scanning available items…", "Checking today's specials…", "Matching preferences…", "Curating recommendations…"],
-    "feedback": ["Logging feedback context…", "Identifying relevant item…", "Preparing response…"],
-    "default":  ["Reading your message…", "Analysing intent…", "Checking relevant info…", "Composing reply…"],
-}
 
-def _keyword_fallback(text: str) -> List[str]:
-    t = text.lower()
-    if any(k in t for k in ("track", "where", "status")) or ("order" in t and "cancel" not in t):
-        return _FALLBACK["track"]
-    if "cancel" in t:
-        return _FALLBACK["cancel"]
-    if any(k in t for k in ("menu", "suggest", "kota", "eat", "food")):
-        return _FALLBACK["menu"]
-    if any(k in t for k in ("feedback", "complain", "review")):
-        return _FALLBACK["feedback"]
-    return _FALLBACK["default"]
+# ── Simple in-memory cache (upgrade to Redis later) ──────────────────────────
+_cache: dict[str, tuple[float, List[str]]] = {}
 
-# ── JSON extractor — handles wrapped/unwrapped model output ──────────────────
-def _extract_steps(raw: str) -> Optional[List[str]]:
-    """Try every reasonable way to get a JSON string array out of raw LLM output."""
-    # 1. Strip markdown fences
-    cleaned = re.sub(r"```(?:json)?", "", raw, flags=re.IGNORECASE).strip()
 
-    # 2. Find first [...] block in the text
-    match = re.search(r'\[.*?\]', cleaned, re.DOTALL)
-    if not match:
+def _cache_key(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _get_cache(key: str) -> Optional[List[str]]:
+    entry = _cache.get(key)
+    if not entry:
         return None
+    ts, data = entry
+    if (asyncio.get_event_loop().time() - ts) > CACHE_TTL:
+        _cache.pop(key, None)
+        return None
+    return data
 
-    try:
-        steps = json.loads(match.group())
-        if isinstance(steps, list) and 2 <= len(steps) <= 6:
-            # Ensure every item is a non-empty string
-            steps = [str(s).strip() for s in steps if str(s).strip()]
-            if len(steps) >= 2:
-                return steps
-    except (json.JSONDecodeError, ValueError):
-        pass
-    return None
 
-# ── Prompt ────────────────────────────────────────────────────────────────────
-_SYSTEM = (
-    "You are a reasoning engine for KotaBot, a South African food-ordering chatbot.\n"
-    "Output ONLY a JSON array of 3-5 short reasoning steps (no markdown, no explanation).\n"
-    "Rules: each step ≤9 words ending with '…', specific to the message, "
-    "active verbs (Checking…, Verifying…, Fetching…).\n"
-    'Example: ["Checking order status in database…","Fetching delivery info…","Formatting reply…"]'
+def _set_cache(key: str, data: List[str]):
+    _cache[key] = (asyncio.get_event_loop().time(), data)
+
+
+# ── Gemini client ────────────────────────────────────────────────────────────
+_GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+_client: Optional[genai.Client] = None
+
+if _GEMINI_KEY:
+    _client = genai.Client(api_key=_GEMINI_KEY)
+    logger.info("[reasoning] Gemini client ready")
+else:
+    logger.warning("[reasoning] No GEMINI_API_KEY — fallback only")
+
+
+# ── System prompt ────────────────────────────────────────────────────────────
+_SYSTEM = """
+You are the internal reasoning engine for KotaBot.
+
+Return ONLY a JSON array of 3–5 reasoning steps.
+
+Rules:
+- Max 9 words per step
+- Must end with "…"
+- No generic steps
+- If order ID exists, include it
+- No explanations, no markdown
+"""
+
+
+_GEN_CONFIG = genai_types.GenerateContentConfig(
+    temperature=0.2,
+    max_output_tokens=120,
+    response_mime_type="application/json",
+    response_schema=list[str],
+    system_instruction=_SYSTEM,
 )
 
-# ── Schemas ───────────────────────────────────────────────────────────────────
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _clean_json(text: str) -> List[str]:
+    """Strict JSON parse with repair fallback"""
+    text = re.sub(r"```json|```", "", text, flags=re.IGNORECASE).strip()
+
+    try:
+        return json.loads(text)
+    except Exception:
+        # 🔥 recovery attempt
+        match = re.search(r"\[.*\]", text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        raise
+
+
+def _normalize_steps(steps: List[str]) -> List[str]:
+    """Enforce output constraints"""
+    clean = []
+
+    for s in steps:
+        if not isinstance(s, str):
+            continue
+
+        s = s.strip()
+
+        # enforce ellipsis
+        if not s.endswith("…"):
+            s += "…"
+
+        # enforce max words (9)
+        words = s.split()[:9]
+        s = " ".join(words)
+
+        clean.append(s)
+
+    return clean[:5]
+
+
+# ── Gemini call ──────────────────────────────────────────────────────────────
+
+def _call_gemini_sync(user_message: str) -> List[str]:
+    response = _client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=user_message,
+        config=_GEN_CONFIG,
+    )
+
+    raw = response.text or ""
+    steps = _clean_json(raw)
+
+    if not isinstance(steps, list):
+        raise ValueError("Invalid AI response")
+
+    return _normalize_steps(steps)
+
+
+# ── Fallback ─────────────────────────────────────────────────────────────────
+
+def _fallback(text: str) -> List[str]:
+    return [
+        "Reading your message carefully…",
+        "Understanding your request intent…",
+        "Checking relevant system data…",
+        "Preparing helpful response…",
+    ]
+
+
+# ── Schemas ──────────────────────────────────────────────────────────────────
+
 class ReasoningRequest(BaseModel):
-    message: str
+    message: str = Field(..., min_length=1, max_length=500)
+
 
 class ReasoningResponse(BaseModel):
-    steps:  List[str]
-    source: str   # "openrouter" | "fallback"
+    steps: List[str]
+    source: str
+    cached: bool = False
 
-# ── Endpoint ──────────────────────────────────────────────────────────────────
+
+# ── Endpoint ─────────────────────────────────────────────────────────────────
+
 @router.post("/reasoning", response_model=ReasoningResponse)
 async def get_reasoning(
     body: ReasoningRequest,
     current_user=Depends(get_current_user),
 ):
-    if not body.message.strip():
-        raise HTTPException(status_code=422, detail="message cannot be empty")
+    user_text = body.message.strip()
 
-    user_text = body.message.strip()[:500]
+    # 🔥 CACHE FIRST (huge performance win)
+    key = _cache_key(user_text)
+    cached = _get_cache(key)
+    if cached:
+        return ReasoningResponse(steps=cached, source="cache", cached=True)
 
+    # 🔥 AI CALL WITH TIMEOUT
     if _client:
         try:
-            response = await _client.chat.completions.create(
-                model=_MODEL,
-                messages=[
-                    {"role": "system", "content": _SYSTEM},
-                    {"role": "user",   "content": f'User message: "{user_text}"\nOutput only the JSON array:'},
-                ],
-                temperature=0.1,     # low = more deterministic JSON
-                max_tokens=150,
-                extra_body={"thinking": {"type": "disabled"}},
+            steps = await asyncio.wait_for(
+                asyncio.to_thread(_call_gemini_sync, user_text),
+                timeout=TIMEOUT_SECONDS
             )
 
-            raw   = (response.choices[0].message.content or "").strip()
-            steps = _extract_steps(raw)
+            _set_cache(key, steps)
 
-            if steps:
-                logger.info(f"[reasoning] OK — {len(steps)} steps")
-                return ReasoningResponse(steps=steps, source="openrouter")
+            return ReasoningResponse(
+                steps=steps,
+                source="gemini",
+                cached=False
+            )
 
-            logger.warning(f"[reasoning] could not extract steps from: {raw[:80]!r}")
+        except Exception as e:
+            logger.warning(f"[reasoning] AI failed: {e}")
 
-        except Exception as exc:
-            logger.warning(f"[reasoning] failed ({exc.__class__.__name__}: {exc})")
-
-    steps = _keyword_fallback(user_text)
-    return ReasoningResponse(steps=steps, source="fallback")
+    # 🔥 FALLBACK (always safe)
+    steps = _fallback(user_text)
+    return ReasoningResponse(
+        steps=steps,
+        source="fallback",
+        cached=False
+    )
