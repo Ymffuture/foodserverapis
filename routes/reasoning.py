@@ -1,243 +1,162 @@
 # routes/reasoning.py
-
 """
-/ai/reasoning — Kimi (OpenRouter) generates structured reasoning steps
-for KotaBot thinking UI.
+/ai/reasoning  — Gemini 2.5 Flash generates context-aware reasoning steps
+                 for KotaBot's thinking block UI.
 
-Production features:
-- Async AI calls (no blocking)
-- Timeout protection
-- In-memory caching (upgrade to Redis later)
-- JSON repair + strict validation
-- Order ID extraction
-- Fallback resilience
+Uses the new `google-genai` SDK (replaces deprecated `google-generativeai`).
+The blocking SDK call runs in a thread pool via asyncio.to_thread so it
+never blocks FastAPI's async event loop.
 """
-
 import asyncio
 import json
 import logging
 import os
 import re
-import hashlib
-from typing import List, Optional
+from typing import List
 
+import google.genai as genai
+import google.genai.types as genai_types
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
-from openai import AsyncOpenAI
+from pydantic import BaseModel
 
-from dependencies import get_current_user
-
-
-# ── Setup ───────────────────────────────────────────────────────────────────
+from dependencies import get_current_user   # flat import — dependencies.py
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ai", tags=["AI"])
 
+# ── Gemini client (singleton, created once at startup) ────────────────────────
+_GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+_client: genai.Client | None = None
 
-# ── Config ──────────────────────────────────────────────────────────────────
-
-KIMI_API_KEY = os.getenv("KIMI_API_KEY")
-MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
-
-TIMEOUT_SECONDS = 3.0
-CACHE_TTL = 60  # seconds
-
-
-# ── OpenRouter / Kimi Client ────────────────────────────────────────────────
-
-client: Optional[AsyncOpenAI] = None
-
-if KIMI_API_KEY:
-    client = AsyncOpenAI(
-        api_key=KIMI_API_KEY,
-        base_url="https://openrouter.ai/api/v1",
-        default_headers={
-            "HTTP-Referer": "https://foodsorder.vercel.app",
-            "X-Title": "KotaBites",
-        },
-    )
-    logger.info("[reasoning] Kimi client ready")
+if _GEMINI_KEY:
+    _client = genai.Client(api_key=_GEMINI_KEY)
+    logger.info("[reasoning] Gemini 2.5 Flash client ready")
 else:
-    logger.warning("[reasoning] No KIMI_API_KEY — fallback only")
+    logger.warning("[reasoning] GEMINI_API_KEY not set — keyword fallback only")
 
-
-# ── Cache (simple in-memory) ────────────────────────────────────────────────
-
-_cache: dict[str, tuple[float, List[str]]] = {}
-
-
-def _cache_key(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()
-
-
-def _get_cache(key: str) -> Optional[List[str]]:
-    entry = _cache.get(key)
-    if not entry:
-        return None
-    ts, data = entry
-    if (asyncio.get_event_loop().time() - ts) > CACHE_TTL:
-        _cache.pop(key, None)
-        return None
-    return data
-
-
-def _set_cache(key: str, data: List[str]):
-    _cache[key] = (asyncio.get_event_loop().time(), data)
-
-
-# ── AI Prompt ───────────────────────────────────────────────────────────────
-
-SYSTEM = """
-You are KotaBot's internal reasoning engine.
-
-Return ONLY a JSON array of 3–5 steps.
-
-Rules:
-- Max 9 words per step
-- Each must end with "…"
-- No explanations, no markdown
-- Must be specific to the message
-- If order ID exists, include it
-"""
-
-
-# ── Helpers ─────────────────────────────────────────────────────────────────
-
-ORDER_REGEX = r"(ORD-\d+|[a-f0-9]{24})"
-
-
-def extract_order_id(text: str) -> Optional[str]:
-    match = re.search(ORDER_REGEX, text)
-    return match.group(0) if match else None
-
-
-def _process_ai_output(text: str) -> List[str]:
-    """Parse + repair + normalize AI output"""
-
-    text = re.sub(r"```json|```", "", text, flags=re.IGNORECASE).strip()
-
-    try:
-        data = json.loads(text)
-    except Exception:
-        match = re.search(r"\[.*\]", text, re.DOTALL)
-        if match:
-            data = json.loads(match.group(0))
-        else:
-            raise ValueError("Invalid JSON from AI")
-
-    if not isinstance(data, list):
-        raise ValueError("AI response not list")
-
-    clean = []
-
-    for s in data:
-        if not isinstance(s, str):
-            continue
-
-        s = s.strip()
-
-        # enforce ellipsis
-        if not s.endswith("…"):
-            s += "…"
-
-        # enforce max 9 words
-        s = " ".join(s.split()[:9])
-
-        clean.append(s)
-
-    return clean[:5]
-
-
-def _fallback(_: str) -> List[str]:
-    return [
+# ── Keyword fallback (used when Gemini is unavailable or fails) ───────────────
+_FALLBACK: dict[str, List[str]] = {
+    "track": [
+        "Identifying order reference in message…",
+        "Querying order records in database…",
+        "Fetching current delivery status…",
+        "Formatting result for you…",
+    ],
+    "cancel": [
+        "Parsing cancellation intent…",
+        "Verifying order ID exists…",
+        "Checking cancellation eligibility…",
+        "Preparing confirmation prompt…",
+    ],
+    "menu": [
+        "Scanning available menu items…",
+        "Checking today's specials…",
+        "Matching your preferences…",
+        "Curating best recommendations…",
+    ],
+    "feedback": [
+        "Logging your feedback context…",
+        "Identifying the relevant item…",
+        "Preparing response…",
+    ],
+    "default": [
         "Reading your message carefully…",
-        "Understanding your request intent…",
-        "Checking relevant system data…",
-        "Preparing helpful response…",
-    ]
+        "Analysing intent and context…",
+        "Checking relevant information…",
+        "Composing the best reply…",
+    ],
+}
 
 
-# ── AI Call ─────────────────────────────────────────────────────────────────
+def _keyword_fallback(text: str) -> List[str]:
+    t = text.lower()
+    if any(k in t for k in ("track", "where", "status")) or \
+       ("order" in t and "cancel" not in t):
+        return _FALLBACK["track"]
+    if "cancel" in t:
+        return _FALLBACK["cancel"]
+    if any(k in t for k in ("menu", "suggest", "kota", "eat", "food")):
+        return _FALLBACK["menu"]
+    if any(k in t for k in ("feedback", "complain", "review")):
+        return _FALLBACK["feedback"]
+    return _FALLBACK["default"]
 
-async def _call_kimi(user_message: str) -> List[str]:
-    response = await client.chat.completions.create(
-        model=MODEL,
-        temperature=0.2,
-        max_tokens=120,
-        messages=[
-            {"role": "system", "content": SYSTEM},
-            {"role": "user", "content": user_message},
-        ],
+
+# ── System instruction ────────────────────────────────────────────────────────
+_SYSTEM = (
+    "You are the internal reasoning engine for KotaBot, a South African "
+    "food-ordering chatbot for KOTABITES.\n\n"
+    "Given a user message, return ONLY a JSON array of 3 to 5 short reasoning "
+    "steps KotaBot would think through before replying.\n\n"
+    "Rules:\n"
+    "- Each step max 9 words, ending with '…'\n"
+    "- Specific to THIS exact message — no generic filler\n"
+    "- Active present-tense verbs: Checking…, Verifying…, Scanning…, Fetching…\n"
+    "- If message contains a 24-char hex order ID, reference it in one step\n"
+    "- Return ONLY a raw JSON array — no markdown, no explanation, nothing else\n\n"
+    'Example: ["Identifying order ID in message…","Querying delivery records…",'
+    '"Checking estimated arrival window…","Formatting status update…"]'
+)
+
+# ── Gemini call config ────────────────────────────────────────────────────────
+_GEN_CONFIG = genai_types.GenerateContentConfig(
+    temperature=0.2,
+    max_output_tokens=200,
+    response_mime_type="application/json",
+    response_schema=list[str],          # new SDK accepts Python type hints directly
+    system_instruction=_SYSTEM,
+)
+
+
+# ── Sync call (runs in thread pool, never blocks event loop) ──────────────────
+def _call_gemini_sync(user_message: str) -> List[str]:
+    assert _client is not None
+
+    response = _client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=user_message,
+        config=_GEN_CONFIG,
     )
 
-    raw = response.choices[0].message.content or ""
-    return _process_ai_output(raw)
+    raw   = response.text.strip()
+    clean = re.sub(r"```json|```", "", raw, flags=re.IGNORECASE).strip()
+    steps = json.loads(clean)
+
+    if not isinstance(steps, list) or not (2 <= len(steps) <= 6):
+        raise ValueError(f"Unexpected shape from Gemini: {steps!r}")
+
+    return [str(s) for s in steps]
 
 
-# ── Schemas ─────────────────────────────────────────────────────────────────
-
+# ── Pydantic schemas ──────────────────────────────────────────────────────────
 class ReasoningRequest(BaseModel):
-    message: str = Field(..., min_length=1, max_length=500)
+    message: str
 
 
 class ReasoningResponse(BaseModel):
-    steps: List[str]
-    source: str   # "kimi" | "fallback" | "cache"
-    cached: bool = False
+    steps:  List[str]
+    source: str   # "gemini" | "fallback"
 
 
-# ── Endpoint ────────────────────────────────────────────────────────────────
-
+# ── Endpoint ──────────────────────────────────────────────────────────────────
 @router.post("/reasoning", response_model=ReasoningResponse)
 async def get_reasoning(
     body: ReasoningRequest,
     current_user=Depends(get_current_user),
 ):
-    user_text = body.message.strip()
-
-    if not user_text:
+    if not body.message.strip():
         raise HTTPException(status_code=422, detail="message cannot be empty")
 
-    # ── Cache first (fast path) ──────────────────────────────────────────────
-    key = _cache_key(user_text)
-    cached = _get_cache(key)
-    if cached:
-        return ReasoningResponse(
-            steps=cached,
-            source="cache",
-            cached=True
-        )
+    user_text = body.message.strip()[:500]   # hard cap — abuse prevention
 
-    # ── Inject order context (smart reasoning) ───────────────────────────────
-    order_id = extract_order_id(user_text)
-    if order_id:
-        user_text += f"\nOrder ID: {order_id}"
-
-    # ── AI call with timeout ─────────────────────────────────────────────────
-    if client:
+    if _client:
         try:
-            steps = await asyncio.wait_for(
-                _call_kimi(user_text),
-                timeout=TIMEOUT_SECONDS
-            )
+            steps = await asyncio.to_thread(_call_gemini_sync, user_text)
+            logger.info(f"[reasoning] Gemini 2.5 Flash OK — {len(steps)} steps for: {user_text[:60]}")
+            return ReasoningResponse(steps=steps, source="gemini")
+        except Exception as exc:
+            logger.warning(f"[reasoning] Gemini failed ({exc.__class__.__name__}: {exc}) — using fallback")
 
-            _set_cache(key, steps)
-
-            logger.info(f"[reasoning] Kimi OK ({len(steps)} steps)")
-            return ReasoningResponse(
-                steps=steps,
-                source="kimi",
-                cached=False
-            )
-
-        except Exception as e:
-            logger.warning(f"[reasoning] Kimi failed: {e}")
-
-    # ── Fallback (always safe) ───────────────────────────────────────────────
-    steps = _fallback(user_text)
-
-    return ReasoningResponse(
-        steps=steps,
-        source="fallback",
-        cached=False
-    )
+    steps = _keyword_fallback(user_text)
+    logger.info(f"[reasoning] keyword fallback — {len(steps)} steps")
+    return ReasoningResponse(steps=steps, source="fallback")
