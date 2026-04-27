@@ -1,162 +1,205 @@
-# routes/reasoning.py
-"""
-/ai/reasoning  — Gemini 2.5 Flash generates context-aware reasoning steps
-                 for KotaBot's thinking block UI.
+# routes/reasoning.py (ADVANCED)
 
-Uses the new `google-genai` SDK (replaces deprecated `google-generativeai`).
-The blocking SDK call runs in a thread pool via asyncio.to_thread so it
-never blocks FastAPI's async event loop.
-"""
 import asyncio
 import json
 import logging
 import os
 import re
-from typing import List
+import hashlib
+from typing import List, Optional
 
 import google.genai as genai
 import google.genai.types as genai_types
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from dependencies import get_current_user   # flat import — dependencies.py
+from dependencies import get_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ai", tags=["AI"])
 
-# ── Gemini client (singleton, created once at startup) ────────────────────────
+
+# ── Config ──────────────────────────────────────────────────────────────────
+TIMEOUT_SECONDS = 3.0
+CACHE_TTL = 60  # seconds (simple in-memory)
+
+
+# ── Simple in-memory cache (upgrade to Redis later) ──────────────────────────
+_cache: dict[str, tuple[float, List[str]]] = {}
+
+
+def _cache_key(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _get_cache(key: str) -> Optional[List[str]]:
+    entry = _cache.get(key)
+    if not entry:
+        return None
+    ts, data = entry
+    if (asyncio.get_event_loop().time() - ts) > CACHE_TTL:
+        _cache.pop(key, None)
+        return None
+    return data
+
+
+def _set_cache(key: str, data: List[str]):
+    _cache[key] = (asyncio.get_event_loop().time(), data)
+
+
+# ── Gemini client ────────────────────────────────────────────────────────────
 _GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-_client: genai.Client | None = None
+_client: Optional[genai.Client] = None
 
 if _GEMINI_KEY:
     _client = genai.Client(api_key=_GEMINI_KEY)
-    logger.info("[reasoning] Gemini 2.5 Flash client ready")
+    logger.info("[reasoning] Gemini client ready")
 else:
-    logger.warning("[reasoning] GEMINI_API_KEY not set — keyword fallback only")
-
-# ── Keyword fallback (used when Gemini is unavailable or fails) ───────────────
-_FALLBACK: dict[str, List[str]] = {
-    "track": [
-        "Identifying order reference in message…",
-        "Querying order records in database…",
-        "Fetching current delivery status…",
-        "Formatting result for you…",
-    ],
-    "cancel": [
-        "Parsing cancellation intent…",
-        "Verifying order ID exists…",
-        "Checking cancellation eligibility…",
-        "Preparing confirmation prompt…",
-    ],
-    "menu": [
-        "Scanning available menu items…",
-        "Checking today's specials…",
-        "Matching your preferences…",
-        "Curating best recommendations…",
-    ],
-    "feedback": [
-        "Logging your feedback context…",
-        "Identifying the relevant item…",
-        "Preparing response…",
-    ],
-    "default": [
-        "Reading your message carefully…",
-        "Analysing intent and context…",
-        "Checking relevant information…",
-        "Composing the best reply…",
-    ],
-}
+    logger.warning("[reasoning] No GEMINI_API_KEY — fallback only")
 
 
-def _keyword_fallback(text: str) -> List[str]:
-    t = text.lower()
-    if any(k in t for k in ("track", "where", "status")) or \
-       ("order" in t and "cancel" not in t):
-        return _FALLBACK["track"]
-    if "cancel" in t:
-        return _FALLBACK["cancel"]
-    if any(k in t for k in ("menu", "suggest", "kota", "eat", "food")):
-        return _FALLBACK["menu"]
-    if any(k in t for k in ("feedback", "complain", "review")):
-        return _FALLBACK["feedback"]
-    return _FALLBACK["default"]
+# ── System prompt ────────────────────────────────────────────────────────────
+_SYSTEM = """
+You are the internal reasoning engine for KotaBot.
+
+Return ONLY a JSON array of 3–5 reasoning steps.
+
+Rules:
+- Max 9 words per step
+- Must end with "…"
+- No generic steps
+- If order ID exists, include it
+- No explanations, no markdown
+"""
 
 
-# ── System instruction ────────────────────────────────────────────────────────
-_SYSTEM = (
-    "You are the internal reasoning engine for KotaBot, a South African "
-    "food-ordering chatbot for KOTABITES.\n\n"
-    "Given a user message, return ONLY a JSON array of 3 to 5 short reasoning "
-    "steps KotaBot would think through before replying.\n\n"
-    "Rules:\n"
-    "- Each step max 9 words, ending with '…'\n"
-    "- Specific to THIS exact message — no generic filler\n"
-    "- Active present-tense verbs: Checking…, Verifying…, Scanning…, Fetching…\n"
-    "- If message contains a 24-char hex order ID, reference it in one step\n"
-    "- Return ONLY a raw JSON array — no markdown, no explanation, nothing else\n\n"
-    'Example: ["Identifying order ID in message…","Querying delivery records…",'
-    '"Checking estimated arrival window…","Formatting status update…"]'
-)
-
-# ── Gemini call config ────────────────────────────────────────────────────────
 _GEN_CONFIG = genai_types.GenerateContentConfig(
     temperature=0.2,
-    max_output_tokens=200,
+    max_output_tokens=120,
     response_mime_type="application/json",
-    response_schema=list[str],          # new SDK accepts Python type hints directly
+    response_schema=list[str],
     system_instruction=_SYSTEM,
 )
 
 
-# ── Sync call (runs in thread pool, never blocks event loop) ──────────────────
-def _call_gemini_sync(user_message: str) -> List[str]:
-    assert _client is not None
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
+def _clean_json(text: str) -> List[str]:
+    """Strict JSON parse with repair fallback"""
+    text = re.sub(r"```json|```", "", text, flags=re.IGNORECASE).strip()
+
+    try:
+        return json.loads(text)
+    except Exception:
+        # 🔥 recovery attempt
+        match = re.search(r"\[.*\]", text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        raise
+
+
+def _normalize_steps(steps: List[str]) -> List[str]:
+    """Enforce output constraints"""
+    clean = []
+
+    for s in steps:
+        if not isinstance(s, str):
+            continue
+
+        s = s.strip()
+
+        # enforce ellipsis
+        if not s.endswith("…"):
+            s += "…"
+
+        # enforce max words (9)
+        words = s.split()[:9]
+        s = " ".join(words)
+
+        clean.append(s)
+
+    return clean[:5]
+
+
+# ── Gemini call ──────────────────────────────────────────────────────────────
+
+def _call_gemini_sync(user_message: str) -> List[str]:
     response = _client.models.generate_content(
         model="gemini-2.5-flash",
         contents=user_message,
         config=_GEN_CONFIG,
     )
 
-    raw   = response.text.strip()
-    clean = re.sub(r"```json|```", "", raw, flags=re.IGNORECASE).strip()
-    steps = json.loads(clean)
+    raw = response.text or ""
+    steps = _clean_json(raw)
 
-    if not isinstance(steps, list) or not (2 <= len(steps) <= 6):
-        raise ValueError(f"Unexpected shape from Gemini: {steps!r}")
+    if not isinstance(steps, list):
+        raise ValueError("Invalid AI response")
 
-    return [str(s) for s in steps]
+    return _normalize_steps(steps)
 
 
-# ── Pydantic schemas ──────────────────────────────────────────────────────────
+# ── Fallback ─────────────────────────────────────────────────────────────────
+
+def _fallback(text: str) -> List[str]:
+    return [
+        "Reading your message carefully…",
+        "Understanding your request intent…",
+        "Checking relevant system data…",
+        "Preparing helpful response…",
+    ]
+
+
+# ── Schemas ──────────────────────────────────────────────────────────────────
+
 class ReasoningRequest(BaseModel):
-    message: str
+    message: str = Field(..., min_length=1, max_length=500)
 
 
 class ReasoningResponse(BaseModel):
-    steps:  List[str]
-    source: str   # "gemini" | "fallback"
+    steps: List[str]
+    source: str
+    cached: bool = False
 
 
-# ── Endpoint ──────────────────────────────────────────────────────────────────
+# ── Endpoint ─────────────────────────────────────────────────────────────────
+
 @router.post("/reasoning", response_model=ReasoningResponse)
 async def get_reasoning(
     body: ReasoningRequest,
     current_user=Depends(get_current_user),
 ):
-    if not body.message.strip():
-        raise HTTPException(status_code=422, detail="message cannot be empty")
+    user_text = body.message.strip()
 
-    user_text = body.message.strip()[:500]   # hard cap — abuse prevention
+    # 🔥 CACHE FIRST (huge performance win)
+    key = _cache_key(user_text)
+    cached = _get_cache(key)
+    if cached:
+        return ReasoningResponse(steps=cached, source="cache", cached=True)
 
+    # 🔥 AI CALL WITH TIMEOUT
     if _client:
         try:
-            steps = await asyncio.to_thread(_call_gemini_sync, user_text)
-            logger.info(f"[reasoning] Gemini 2.5 Flash OK — {len(steps)} steps for: {user_text[:60]}")
-            return ReasoningResponse(steps=steps, source="gemini")
-        except Exception as exc:
-            logger.warning(f"[reasoning] Gemini failed ({exc.__class__.__name__}: {exc}) — using fallback")
+            steps = await asyncio.wait_for(
+                asyncio.to_thread(_call_gemini_sync, user_text),
+                timeout=TIMEOUT_SECONDS
+            )
 
-    steps = _keyword_fallback(user_text)
-    logger.info(f"[reasoning] keyword fallback — {len(steps)} steps")
-    return ReasoningResponse(steps=steps, source="fallback")
+            _set_cache(key, steps)
+
+            return ReasoningResponse(
+                steps=steps,
+                source="gemini",
+                cached=False
+            )
+
+        except Exception as e:
+            logger.warning(f"[reasoning] AI failed: {e}")
+
+    # 🔥 FALLBACK (always safe)
+    steps = _fallback(user_text)
+    return ReasoningResponse(
+        steps=steps,
+        source="fallback",
+        cached=False
+    )
