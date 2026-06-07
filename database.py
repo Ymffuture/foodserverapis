@@ -1,4 +1,4 @@
-# database.py  (updated — register RewardCode model)
+# database.py
 from motor.motor_asyncio import AsyncIOMotorClient
 from beanie import init_beanie
 from config import DATABASE_URL
@@ -8,7 +8,6 @@ client = None
 async def init_db():
     global client
     client = AsyncIOMotorClient(DATABASE_URL)
-
     database = client["kotabites"]
 
     await init_beanie(
@@ -21,16 +20,17 @@ async def init_db():
             "models.delivery_driver.DeliveryDriver",
             "models.wallet_transaction.WalletTransaction",
             "models.delivery_assignment.DeliveryAssignment",
-            "models.reward_code.RewardCode",     
-            "models.webauthn_credential.WebAuthnCredential", # ← NEW
+            "models.reward_code.RewardCode",
+            "models.webauthn_credential.WebAuthnCredential",
+            "models.notification.AppNotification",   # ← NEW
         ]
     )
 
-    # Ensure the reward_codes.code field has a unique index
     try:
         await database["reward_codes"].create_index("code", unique=True)
         await database["webauthn_credentials"].create_index("credential_id", unique=True)
+        await database["app_notifications"].create_index("created_at")
     except Exception:
-        pass  # index may already exist
+        pass
 
-    print("✅ Connected to MongoDB + Beanie initialized (with rewards model)")
+    print("✅ Connected to MongoDB + Beanie initialized (with notifications model)")
