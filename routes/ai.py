@@ -21,6 +21,7 @@ from models.delivery_driver import DeliveryDriver, DriverStatus
 from models.delivery_assignment import DeliveryAssignment, AssignmentStatus
 from models.wallet_transaction import WalletTransaction
 from models.reward_code import RewardCode
+from models.notification import AppNotification, NotificationTarget   # ← NEW
 from utils.enums import OrderStatus
 from utils.business_hours import get_status
 
@@ -246,6 +247,163 @@ Min withdrawal   : R50.00  (processed in 24–48 hrs)
         return ""
 
 
+# ── NEW: Account status block ──────────────────────────────────────────────
+def _build_account_status_block(user: User) -> str:
+    """
+    Builds a clear summary of the user's moderation status so KotaBot
+    can accurately explain restrictions and guide users accordingly.
+    """
+    now = datetime.utcnow()
+    lines: list[str] = []
+
+    if user.is_banned:
+        lines.append("⛔  ACCOUNT STATUS : PERMANENTLY BANNED")
+        lines.append(f"   Reason          : {user.banned_reason or 'No reason provided'}")
+        lines.append(f"   Banned at       : {user.banned_at.strftime('%d %b %Y %H:%M') if user.banned_at else 'Unknown'}")
+        lines.append("   Appeal          : Contact futurekgomotso@gmail.com or 065 393 5339")
+        lines.append("")
+        lines.append("   ⚠️  KOTABOT INSTRUCTION: This account is fully banned.")
+        lines.append("   DO NOT assist with ordering, cart, wallet, or rewards.")
+        lines.append("   Only provide support contact details and explain the ban.")
+
+    elif user.is_suspended:
+        # Check if timed suspension has expired
+        if user.suspended_until and now > user.suspended_until:
+            lines.append("✅  ACCOUNT STATUS : ACTIVE (suspension period has ended)")
+            lines.append("   Note            : The suspension window has passed. User can transact normally.")
+        else:
+            lines.append("⏸️   ACCOUNT STATUS : SUSPENDED")
+            lines.append(f"   Reason          : {user.suspension_reason or 'No reason provided'}")
+            lines.append(f"   Suspended at    : {user.suspended_at.strftime('%d %b %Y %H:%M') if user.suspended_at else 'Unknown'}")
+            if user.suspended_until:
+                remaining_mins = int((user.suspended_until - now).total_seconds() / 60)
+                remaining_str = (
+                    f"{remaining_mins // 1440}d {(remaining_mins % 1440) // 60}h"
+                    if remaining_mins >= 1440
+                    else f"{remaining_mins // 60}h {remaining_mins % 60}m"
+                    if remaining_mins >= 60
+                    else f"{remaining_mins}m"
+                )
+                lines.append(f"   Lifts at        : {user.suspended_until.strftime('%d %b %Y %H:%M')} ({remaining_str} remaining)")
+            else:
+                lines.append("   Duration        : Indefinite (admin must lift manually)")
+            lines.append("   Appeal          : Contact futurekgomotso@gmail.com or 065 393 5339")
+            lines.append("")
+            lines.append("   ⚠️  KOTABOT INSTRUCTION: Account is suspended.")
+            lines.append("   DO NOT allow new orders, cart, wallet, or rewards.")
+            lines.append("   CAN still: explain the suspension, give support contacts, answer tracking questions.")
+
+    elif user.warning_count >= 3:
+        lines.append("🔒  ACCOUNT STATUS : RESTRICTED (3+ warnings)")
+        lines.append(f"   Warning count   : {user.warning_count}")
+        lines.append("   Restrictions    : Cannot add to cart, checkout, order, use wallet, or redeem rewards.")
+        lines.append("   Can still       : View orders, use KotaBot chat.")
+        lines.append("")
+        lines.append("   ⚠️  KOTABOT INSTRUCTION: Do NOT help with ordering or payments.")
+        lines.append("   Politely explain they have reached the warning limit and must contact support.")
+
+    elif user.warning_count > 0:
+        last_warning = user.warnings[-1] if user.warnings else None
+        lines.append(f"⚠️   ACCOUNT STATUS : WARNED ({user.warning_count} warning(s))")
+        if last_warning:
+            lines.append(f"   Latest warning  : {last_warning.reason}")
+            lines.append(f"   Issued at       : {last_warning.issued_at.strftime('%d %b %Y %H:%M')}")
+            lines.append(f"   Issued by       : {last_warning.issued_by_name}")
+        lines.append("   Note            : Account is fully functional. 3 warnings = restricted.")
+
+    else:
+        lines.append("✅  ACCOUNT STATUS : ACTIVE — no restrictions")
+
+    block = "\n".join(lines)
+
+    # List all warnings in full for context
+    if user.warnings:
+        warning_lines = []
+        for idx, w in enumerate(user.warnings, 1):
+            warning_lines.append(
+                f"  {idx}. [{w.issued_at.strftime('%d %b %Y')}] {w.reason}"
+                + (f" — \"{w.message}\"" if w.message else "")
+                + f" (by {w.issued_by_name})"
+            )
+        block += "\n\nAll warnings on record:\n" + "\n".join(warning_lines)
+
+    return block
+
+
+# ── NEW: Notifications block ───────────────────────────────────────────────
+async def _build_notifications_block(user_id: str) -> str:
+    """
+    Fetches active, non-expired admin notifications targeting this user
+    (broadcast + specific). Returns a formatted block for the system prompt
+    so KotaBot can proactively surface important messages.
+    """
+    try:
+        now = datetime.utcnow()
+        notifications = await AppNotification.find({
+            "is_active": True,
+            "expires_at": {"$gt": now},
+            "$or": [
+                {"target": NotificationTarget.ALL.value},
+                {"target": NotificationTarget.SPECIFIC.value, "target_user_id": user_id},
+            ],
+        }).sort("-created_at").limit(20).to_list()
+
+        if not notifications:
+            return "  (No active notifications)"
+
+        TYPE_ICONS = {
+            "info":        "ℹ️ ",
+            "warning":     "⚠️ ",
+            "maintenance": "🔧",
+            "promo":       "🎁",
+            "update":      "🆕",
+            "urgent":      "🚨",
+        }
+
+        lines = []
+        unread_ids = [n for n in notifications if user_id not in n.read_by]
+
+        for n in notifications:
+            icon       = TYPE_ICONS.get(n.type.value, "📣")
+            read_label = "UNREAD" if user_id not in n.read_by else "read"
+            target_label = "→ YOU specifically" if n.target.value == "specific" else "broadcast"
+            days_left  = max(0, (n.expires_at - now).days)
+            lines.append(
+                f"  {icon} [{n.type.value.upper()}] [{read_label}] [{target_label}]  "
+                f"expires in {days_left}d\n"
+                f"     Title  : {n.title}\n"
+                f"     Message: {n.message}\n"
+                f"     From   : {n.created_by_name}  |  Sent: {n.created_at.strftime('%d %b %Y %H:%M')}"
+            )
+
+        unread_count = len(unread_ids)
+        header = (
+            f"Active notifications: {len(notifications)} total, "
+            f"{unread_count} unread"
+        )
+
+        # KotaBot instruction for urgent/unread messages
+        urgent_unread = [
+            n for n in unread_ids
+            if n.type.value in ("urgent", "warning", "maintenance")
+        ]
+        instruction = ""
+        if urgent_unread:
+            titles = ", ".join(f'"{n.title}"' for n in urgent_unread[:3])
+            instruction = (
+                f"\n   ⚠️  KOTABOT INSTRUCTION: There are {len(urgent_unread)} urgent/unread "
+                f"notification(s) for this user ({titles}). "
+                "Proactively mention them at the start of your reply "
+                "or when relevant to the conversation."
+            )
+
+        return header + instruction + "\n\n" + "\n\n".join(lines)
+
+    except Exception as e:
+        logger.warning(f"Notifications block failed for {user_id}: {e}")
+        return "  (Notifications data unavailable)"
+
+
 # ── System Prompt ──────────────────────────────────────────────────────────
 async def build_system_prompt(user: User, order_id: Optional[str] = None) -> str:
 
@@ -370,6 +528,12 @@ Cancellable : {'YES (still ' + status_val + ')' if can_cancel else 'NO (already 
 
     # ── Driver block ──────────────────────────────────────────────────────
     driver_block = await _build_driver_block(str(user.id))
+
+    # ── Account status block (NEW) ────────────────────────────────────────
+    account_status_block = _build_account_status_block(user)
+
+    # ── Notifications block (NEW) ─────────────────────────────────────────
+    notifications_block = await _build_notifications_block(str(user.id))
 
     phone   = getattr(user, "phone", None) or "Not on file"
     is_admin = getattr(user, "is_admin", False)
@@ -591,6 +755,16 @@ Admin      : {'✅ YES — has admin panel access' if is_admin else 'No'}
 {history_block}
 
 ════════════════════════════════════════════════════════════════════════
+                     ACCOUNT MODERATION STATUS
+════════════════════════════════════════════════════════════════════════
+{account_status_block}
+
+════════════════════════════════════════════════════════════════════════
+                     ADMIN NOTIFICATIONS FOR THIS USER
+════════════════════════════════════════════════════════════════════════
+{notifications_block}
+
+════════════════════════════════════════════════════════════════════════
                       CANCELLATION RULES
 ════════════════════════════════════════════════════════════════════════
 - Only cancel if status is "pending" or "paid"
@@ -645,6 +819,23 @@ Content rules:
   - For billing/payment → Paystack handles it; reference = payment_reference on order
   - If server feels slow → mention it's on Render free tier, cold starts ~30–60s, normal
   - If the user is ADMIN (is_admin = True) → they can manage orders/drivers at the admin panel
+
+Account moderation rules (CRITICAL — enforce strictly):
+  - If account is BANNED → refuse all transactional help; direct to support only
+  - If account is SUSPENDED (and window has NOT passed) → refuse ordering/wallet/rewards; still track orders
+  - If account is RESTRICTED (3+ warnings) → refuse ordering/wallet/rewards; explain clearly
+  - If account is WARNED (1-2 warnings) → allow all features; gently remind them about warnings if relevant
+  - NEVER pretend restrictions don't exist; be honest but empathetic about moderation status
+  - Always point to futurekgomotso@gmail.com or 065 393 5339 for moderation appeals
+
+Notification rules:
+  - If there are UNREAD notifications → surface them naturally in conversation
+  - URGENT/WARNING type unread → mention proactively at the top of your first reply
+  - PROMO type → mention when relevant (user asks about deals, rewards, menu)
+  - MAINTENANCE type → warn user if they're about to take an action that might be affected
+  - INFO/UPDATE type → mention when directly relevant to the topic
+  - Don't dump all notifications at once — weave them in naturally
+  - After mentioning a notification, you can say "You can dismiss this in the notifications bell 🔔"
 
 Rewards help (detailed):
   - If customer asks "how many points do I have?" → calculate from delivered orders above
