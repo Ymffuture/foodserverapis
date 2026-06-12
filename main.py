@@ -5,8 +5,9 @@ from contextlib import asynccontextmanager
 from database import init_db
 from routes import auth, menu, orders, payments, ai, routes_analytics, delivery, rewards, webauthn
 from routes.reasoning     import router as reasoning_router
-from routes.admin_users   import router as admin_users_router    # ← NEW
-from routes.notifications  import router as notifications_router  # ← NEW
+from routes.admin_users   import router as admin_users_router
+from routes.notifications  import router as notifications_router
+from routes.Users          import router as users_router              # ← NEW
 
 
 @asynccontextmanager
@@ -40,8 +41,9 @@ app.include_router(delivery.router,                                   tags=["Del
 app.include_router(rewards.router,                                    tags=["Rewards"])
 app.include_router(webauthn.router,                                   tags=["WebAuthn"])
 app.include_router(routes_analytics.router,                           tags=["Analytics"])
-app.include_router(admin_users_router,                                tags=["Admin — Users"])   # ← NEW
-app.include_router(notifications_router,                              tags=["Notifications"])   # ← NEW
+app.include_router(admin_users_router,                                tags=["Admin — Users"])
+app.include_router(notifications_router,                              tags=["Notifications"])
+app.include_router(users_router,                                      tags=["Users"])  # ← NEW
 
 
 @app.get("/")
@@ -59,7 +61,8 @@ def home():
             "Customer rewards wallet (KotaPoints)",
             "WebAuthn passkey / fingerprint login",
             "Real-time admin approval",
-            "User moderation (suspend · ban · warn · delete)",   # ← NEW
-            "Admin push notifications",                           # ← NEW
+            "User moderation (suspend · ban · warn · delete)",
+            "Admin push notifications",
+            "Account status & feature gating",                        # ← NEW
         ]
     }
