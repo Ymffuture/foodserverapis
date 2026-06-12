@@ -47,6 +47,11 @@ class User(Document):
     # ── Warnings ────────────────────────────────────────────────────────
     warnings: List[UserWarning] = Field(default_factory=list)
     warning_count: int = 0
+    # ── Admin internal note (shown only in admin panel + KotaBot context) ─
+    # Referenced by routes/ai.py _build_account_status_block() and
+    # routes/Users.py _derive_status(). Stored here so the AI system prompt
+    # can surface it without an extra DB query.
+    admin_note: Optional[str] = None             # ← NEW
     # ── Meta ─────────────────────────────────────────────────────────────
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
