@@ -22,7 +22,8 @@ async def init_db():
             "models.delivery_assignment.DeliveryAssignment",
             "models.reward_code.RewardCode",
             "models.webauthn_credential.WebAuthnCredential",
-            "models.notification.AppNotification",   # ← NEW
+            "models.notification.AppNotification",
+            "routes.appeals.AppealDoc",                            # ← NEW
         ]
     )
 
@@ -30,7 +31,8 @@ async def init_db():
         await database["reward_codes"].create_index("code", unique=True)
         await database["webauthn_credentials"].create_index("credential_id", unique=True)
         await database["app_notifications"].create_index("created_at")
+        await database["appeals"].create_index([("user_id", 1), ("status", 1)])  # ← NEW
     except Exception:
         pass
 
-    print("✅ Connected to MongoDB + Beanie initialized (with notifications model)")
+    print("✅ Connected to MongoDB + Beanie initialized (with appeals model)")
