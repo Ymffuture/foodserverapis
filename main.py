@@ -8,7 +8,8 @@ from routes.reasoning     import router as reasoning_router
 from routes.admin_users   import router as admin_users_router
 from routes.notifications  import router as notifications_router
 from routes.Users          import router as users_router              # ← NEW
-
+from routes.appeals import router as appeals_router
+app.include_router(appeals_router, tags=["Appeals"])
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -44,7 +45,7 @@ app.include_router(routes_analytics.router,                           tags=["Ana
 app.include_router(admin_users_router,                                tags=["Admin — Users"])
 app.include_router(notifications_router,                              tags=["Notifications"])
 app.include_router(users_router,                                      tags=["Users"])  # ← NEW
-
+app.include_router(appeals_router,                               tags=["Appeals"])  # ← NEW
 
 @app.get("/")
 def home():
