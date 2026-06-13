@@ -23,7 +23,14 @@ async def init_db():
             "models.reward_code.RewardCode",
             "models.webauthn_credential.WebAuthnCredential",
             "models.notification.AppNotification",
-            "routes.appeals.AppealDoc",                            # ← NEW
+            "routes.appeals.AppealDoc",     
+            # database.py — add to document_models list
+"models.social.Comment",
+"models.social.CommentLike",
+"models.social.Like",
+"models.social.Bookmark",
+"models.social.Share",
+            # ← NEW
         ]
     )
 
