@@ -4,12 +4,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from database import init_db
 from routes import auth, menu, orders, payments, ai, routes_analytics, delivery, rewards, webauthn
-from routes.reasoning     import router as reasoning_router
-from routes.admin_users   import router as admin_users_router
-from routes.notifications  import router as notifications_router
-from routes.Users          import router as users_router              # ← NEW
-from routes.appeals import router as appeals_router
-app.include_router(appeals_router, tags=["Appeals"])
+from routes.reasoning    import router as reasoning_router
+from routes.admin_users  import router as admin_users_router
+from routes.notifications import router as notifications_router
+from routes.Users         import router as users_router
+from routes.appeals       import router as appeals_router              # ← NEW
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -20,7 +20,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="KotaBites API",
     description="Online Kota Ordering System with Delivery, Wallet, Rewards & Moderation",
-    version="2.2.0",
+    version="2.3.0",
     lifespan=lifespan,
 )
 
@@ -32,39 +32,37 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth.router,              prefix="/auth",          tags=["Auth"])
-app.include_router(menu.router,              prefix="/menu",          tags=["Menu"])
-app.include_router(orders.router,            prefix="/orders",        tags=["Orders"])
-app.include_router(payments.router,          prefix="/payments",      tags=["Payments"])
-app.include_router(ai.router,                prefix="/ai",            tags=["AI"])
-app.include_router(reasoning_router)                                  # prefix="/ai" set in router
-app.include_router(delivery.router,                                   tags=["Delivery"])
-app.include_router(rewards.router,                                    tags=["Rewards"])
-app.include_router(webauthn.router,                                   tags=["WebAuthn"])
-app.include_router(routes_analytics.router,                           tags=["Analytics"])
-app.include_router(admin_users_router,                                tags=["Admin — Users"])
-app.include_router(notifications_router,                              tags=["Notifications"])
-app.include_router(users_router,                                      tags=["Users"])  # ← NEW
+app.include_router(auth.router,              prefix="/auth",     tags=["Auth"])
+app.include_router(menu.router,              prefix="/menu",     tags=["Menu"])
+app.include_router(orders.router,            prefix="/orders",   tags=["Orders"])
+app.include_router(payments.router,          prefix="/payments", tags=["Payments"])
+app.include_router(ai.router,                prefix="/ai",       tags=["AI"])
+app.include_router(reasoning_router)
+app.include_router(delivery.router,                              tags=["Delivery"])
+app.include_router(rewards.router,                               tags=["Rewards"])
+app.include_router(webauthn.router,                              tags=["WebAuthn"])
+app.include_router(routes_analytics.router,                      tags=["Analytics"])
+app.include_router(admin_users_router,                           tags=["Admin — Users"])
+app.include_router(notifications_router,                         tags=["Notifications"])
+app.include_router(users_router,                                 tags=["Users"])
 app.include_router(appeals_router,                               tags=["Appeals"])  # ← NEW
+
 
 @app.get("/")
 def home():
     return {
-        "message": "KotaBites API v2.2 🔥",
+        "message": "KotaBites API v2.3 🔥",
         "features": [
             "User authentication (JWT + Google + GitHub + Spotify)",
-            "Menu management",
-            "Order tracking",
-            "AI chatbot (OpenRouter)",
-            "AI reasoning (Gemini 2.5 Flash)",
-            "Delivery driver system",
-            "Driver wallet management",
+            "Menu management", "Order tracking",
+            "AI chatbot (OpenRouter)", "AI reasoning (Gemini 2.5 Flash)",
+            "Delivery driver system", "Driver wallet management",
             "Customer rewards wallet (KotaPoints)",
             "WebAuthn passkey / fingerprint login",
             "Real-time admin approval",
-            "User moderation (suspend · ban · warn · delete)",
+            "User moderation (suspend · ban · warn · other)",
             "Admin push notifications",
-            "Account status & feature gating",      
-            "User appeal system", # ← NEW
+            "Account status & feature gating",
+            "User appeal system",                                  # ← NEW
         ]
     }
