@@ -64,6 +64,7 @@ def home():
             "Real-time admin approval",
             "User moderation (suspend · ban · warn · delete)",
             "Admin push notifications",
-            "Account status & feature gating",                        # ← NEW
+            "Account status & feature gating",      
+            "User appeal system", # ← NEW
         ]
     }
