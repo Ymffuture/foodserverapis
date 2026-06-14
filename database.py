@@ -48,7 +48,17 @@ async def init_db():
         )
 
         # ───── INDEXES ─────
+
+        # reward_codes.code — must be UNIQUE.
+        # Drop any existing non-unique "code_1" first so a re-deploy
+        # on a live DB doesn't hit IndexKeySpecsConflict (error 86).
+        try:
+            await database["reward_codes"].drop_index("code_1")
+            logging.info("🗑️  Dropped stale non-unique index 'code_1' on reward_codes")
+        except Exception:
+            pass  # Index didn't exist — that's fine
         await database["reward_codes"].create_index("code", unique=True)
+
         await database["webauthn_credentials"].create_index("credential_id", unique=True)
         await database["app_notifications"].create_index("created_at")
         await database["appeals"].create_index([("user_id", 1), ("status", 1)])
@@ -61,7 +71,6 @@ async def init_db():
 
 
 async def close_db():
-    """Proper cleanup for production / reload environments"""
     global client
     if client:
         client.close()
