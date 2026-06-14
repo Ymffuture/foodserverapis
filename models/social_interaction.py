@@ -1,16 +1,16 @@
 # backend/models/social_interaction.py
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, Field, ConfigDict
-from beanie import Document, EmbeddedModel
+from pydantic import BaseModel, Field
+from beanie import Document
 from bson import ObjectId
 
 
 # ─────────────────────────────────────────────
-# Embedded Models (FIXED for Beanie)
+# Embedded Models (CORRECT FOR BEANIE)
 # ─────────────────────────────────────────────
 
-class CommentReply(EmbeddedModel):
+class CommentReply(BaseModel):
     id: str = Field(default_factory=lambda: str(ObjectId()))
     user_id: str
     user_name: str
@@ -23,7 +23,7 @@ class CommentReply(EmbeddedModel):
     edited_at: Optional[datetime] = None
 
 
-class Comment(EmbeddedModel):
+class Comment(BaseModel):
     id: str = Field(default_factory=lambda: str(ObjectId()))
     user_id: str
     user_name: str
@@ -39,14 +39,14 @@ class Comment(EmbeddedModel):
     deleted_at: Optional[datetime] = None
 
 
-class ShareRecord(EmbeddedModel):
+class ShareRecord(BaseModel):
     user_id: Optional[str] = None
     platform: str
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 # ─────────────────────────────────────────────
-# Main Document
+# MAIN DOCUMENT
 # ─────────────────────────────────────────────
 
 class SocialInteraction(Document):
@@ -78,7 +78,9 @@ class SocialInteraction(Document):
             [("updated_at", -1)],
         ]
 
-    # ───── LIKE ─────
+    # ─────────────────────────────────────────
+    # LIKE
+    # ─────────────────────────────────────────
     async def toggle_like(self, user_id: str):
         if user_id in self.liked_by:
             self.liked_by.remove(user_id)
@@ -94,7 +96,9 @@ class SocialInteraction(Document):
 
         return {"liked": liked, "count": self.likes}
 
-    # ───── COMMENT ─────
+    # ─────────────────────────────────────────
+    # COMMENT
+    # ─────────────────────────────────────────
     async def add_comment(self, user_id, name, content, avatar=None):
         comment = Comment(
             user_id=user_id,
@@ -103,7 +107,7 @@ class SocialInteraction(Document):
             content=content,
         )
 
-        self.comments = [comment] + self.comments
+        self.comments.insert(0, comment)
         self.comment_count = len([c for c in self.comments if not c.is_deleted])
 
         await self._recalc()
@@ -121,15 +125,17 @@ class SocialInteraction(Document):
                     content=content,
                 )
 
-                c.replies = [reply] + c.replies
+                c.replies.insert(0, reply)
+
                 await self._recalc()
                 await self.save()
                 return reply
+
         return None
 
     async def like_comment(self, comment_id, user_id):
         for c in self.comments:
-            if c.id == comment_id:
+            if c.id == comment_id and not c.is_deleted:
                 if user_id not in c.liked_by:
                     c.liked_by.append(user_id)
                     c.likes += 1
@@ -143,14 +149,23 @@ class SocialInteraction(Document):
                 if c.user_id == user_id or is_admin:
                     c.is_deleted = True
                     c.deleted_at = datetime.utcnow()
-                    self.comment_count = max(0, self.comment_count - 1)
+
+                    self.comment_count = len(
+                        [x for x in self.comments if not x.is_deleted]
+                    )
+
                     await self._recalc()
                     await self.save()
                     return True
         return False
 
+    # ─────────────────────────────────────────
+    # SHARE
+    # ─────────────────────────────────────────
     async def record_share(self, platform, user_id=None):
-        self.shares.append(ShareRecord(user_id=user_id, platform=platform))
+        self.shares.append(
+            ShareRecord(user_id=user_id, platform=platform)
+        )
         self.share_count += 1
 
         await self._recalc()
@@ -158,6 +173,9 @@ class SocialInteraction(Document):
 
         return {"total_shares": self.share_count}
 
+    # ─────────────────────────────────────────
+    # BOOKMARK
+    # ─────────────────────────────────────────
     async def toggle_bookmark(self, user_id: str):
         if user_id in self.bookmarks:
             self.bookmarks.remove(user_id)
@@ -171,6 +189,9 @@ class SocialInteraction(Document):
         await self.save()
         return {"bookmarked": state, "count": self.bookmark_count}
 
+    # ─────────────────────────────────────────
+    # ENGAGEMENT SCORE
+    # ─────────────────────────────────────────
     async def _recalc(self):
         active_comments = len([c for c in self.comments if not c.is_deleted])
         active_replies = sum(len(c.replies) for c in self.comments)
@@ -184,10 +205,18 @@ class SocialInteraction(Document):
 
         self.updated_at = datetime.utcnow()
 
+    # ─────────────────────────────────────────
+    # GET OR CREATE
+    # ─────────────────────────────────────────
     @classmethod
     async def get_or_create(cls, item_id, item_type):
-        obj = await cls.find_one({"item_id": item_id, "item_type": item_type})
+        obj = await cls.find_one({
+            "item_id": item_id,
+            "item_type": item_type
+        })
+
         if not obj:
             obj = cls(item_id=item_id, item_type=item_type)
             await obj.insert()
+
         return obj
