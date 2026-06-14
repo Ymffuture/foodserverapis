@@ -41,7 +41,7 @@ def map_comment(c, user_id=None):
 # ─────────────────────────────────────────────
 
 @router.post("/like")
-async def toggle_like(data: LikeToggle, user: User = Depends(get_current_active_user)):
+async def toggle_like(data: LikeToggle, user: User = Depends(get_current_user)):
     interaction = await SocialInteraction.get_or_create(data.item_id, data.item_type)
 
     result = await interaction.toggle_like(str(user.id))
@@ -58,7 +58,7 @@ async def toggle_like(data: LikeToggle, user: User = Depends(get_current_active_
 # ─────────────────────────────────────────────
 
 @router.post("/comment")
-async def add_comment(data: CommentCreate, user: User = Depends(get_current_active_user)):
+async def add_comment(data: CommentCreate, user: User = Depends(get_current_user)):
     interaction = await SocialInteraction.get_or_create(data.item_id, data.item_type)
 
     if data.parent_comment_id:
@@ -94,7 +94,7 @@ async def get_comments(
     item_type: str = Query(...),
     page: int = 1,
     limit: int = 20,
-    user: Optional[User] = Depends(get_current_active_user),
+    user: Optional[User] = Depends(get_current_user),
 ):
     interaction = await SocialInteraction.find_one({
         "item_id": item_id,
@@ -129,7 +129,7 @@ async def get_comments(
 
 
 @router.delete("/comment/{comment_id}")
-async def delete_comment(comment_id: str, user: User = Depends(get_current_active_user)):
+async def delete_comment(comment_id: str, user: User = Depends(get_current_user)):
     interaction = await SocialInteraction.find_one({"comments.id": comment_id})
 
     if not interaction:
@@ -144,7 +144,7 @@ async def delete_comment(comment_id: str, user: User = Depends(get_current_activ
 
 
 @router.post("/comment/{comment_id}/like")
-async def like_comment(comment_id: str, user: User = Depends(get_current_active_user)):
+async def like_comment(comment_id: str, user: User = Depends(get_current_user)):
     interaction = await SocialInteraction.find_one({"comments.id": comment_id})
 
     if not interaction:
@@ -160,7 +160,7 @@ async def like_comment(comment_id: str, user: User = Depends(get_current_active_
 # ─────────────────────────────────────────────
 
 @router.post("/share")
-async def share(data: ShareRecordCreate, user: Optional[User] = Depends(get_current_active_user)):
+async def share(data: ShareRecordCreate, user: Optional[User] = Depends(get_current_user)):
     interaction = await SocialInteraction.get_or_create(data.item_id, data.item_type)
 
     result = await interaction.record_share(
@@ -179,7 +179,7 @@ async def share(data: ShareRecordCreate, user: Optional[User] = Depends(get_curr
 # ─────────────────────────────────────────────
 
 @router.post("/bookmark")
-async def bookmark(data: BookmarkToggle, user: User = Depends(get_current_active_user)):
+async def bookmark(data: BookmarkToggle, user: User = Depends(get_current_user)):
     interaction = await SocialInteraction.get_or_create(data.item_id, data.item_type)
 
     result = await interaction.toggle_bookmark(str(user.id))
@@ -199,7 +199,7 @@ async def bookmark(data: BookmarkToggle, user: User = Depends(get_current_active
 async def stats(
     item_id: str,
     item_type: str = Query(...),
-    user: Optional[User] = Depends(get_current_active_user),
+    user: Optional[User] = Depends(get_current_user),
 ):
     interaction = await SocialInteraction.find_one({
         "item_id": item_id,
