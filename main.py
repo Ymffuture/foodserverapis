@@ -1,12 +1,14 @@
 # backend/main.py
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from contextlib import asynccontextmanager
-import time
-import logging
 
-from database import init_db, close_db
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+
+from database import init_db
+
+# ─────────────────────────────────────────────
+# ROUTERS
+# ─────────────────────────────────────────────
 
 from routes.auth import router as auth_router
 from routes.menu import router as menu_router
@@ -19,7 +21,7 @@ from routes.webauthn import router as webauthn_router
 from routes.analytics import router as analytics_router
 from routes.admin_users import router as admin_users_router
 from routes.notifications import router as notifications_router
-from routes.users import router as users_router
+from routes.Users import router as users_router
 from routes.appeals import router as appeals_router
 from routes.social import router as social_router
 from routes.reasoning import router as reasoning_router
@@ -33,19 +35,22 @@ from routes.reasoning import router as reasoning_router
 async def lifespan(app: FastAPI):
     await init_db()
     yield
-    await close_db()
 
+
+# ─────────────────────────────────────────────
+# APP INIT
+# ─────────────────────────────────────────────
 
 app = FastAPI(
     title="KotaBites API",
-    description="Food delivery + social + wallet system",
+    description="Online ordering system with social + wallet + moderation",
     version="2.3.0",
     lifespan=lifespan,
 )
 
 
 # ─────────────────────────────────────────────
-# CORS (LOCK THIS IN PRODUCTION)
+# CORS (tighten in production)
 # ─────────────────────────────────────────────
 
 app.add_middleware(
@@ -53,7 +58,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:5173",
-        "https://foodsorder.vercel.app"
+        "https://your-domain.com"
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -62,40 +67,7 @@ app.add_middleware(
 
 
 # ─────────────────────────────────────────────
-# REQUEST LOGGING
-# ─────────────────────────────────────────────
-
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    start = time.time()
-    response = await call_next(request)
-    duration = time.time() - start
-
-    logging.info(
-        f"{request.method} {request.url.path} - {response.status_code} ({duration:.2f}s)"
-    )
-
-    return response
-
-
-# ─────────────────────────────────────────────
-# GLOBAL ERROR HANDLER
-# ─────────────────────────────────────────────
-
-@app.exception_handler(Exception)
-async def global_error_handler(request: Request, exc: Exception):
-    logging.exception("Unhandled error")
-    return JSONResponse(
-        status_code=500,
-        content={
-            "success": False,
-            "message": "Internal server error"
-        },
-    )
-
-
-# ─────────────────────────────────────────────
-# ROUTERS (VERSIONED API)
+# ROUTES (VERSIONED)
 # ─────────────────────────────────────────────
 
 API_PREFIX = "/api/v1"
@@ -118,14 +90,24 @@ app.include_router(reasoning_router, prefix=f"{API_PREFIX}/reasoning", tags=["Re
 
 
 # ─────────────────────────────────────────────
-# HEALTH CHECK
+# ROOT
 # ─────────────────────────────────────────────
 
 @app.get("/")
-def root():
+def home():
     return {
-        "message": "KotaBites API is running 🚀",
-        "version": "2.3.0",
-        "status": "healthy",
-        "docs": "/docs",
+        "message": "KotaBites API v2.3 🔥",
+        "status": "running",
+        "features": [
+            "Authentication (JWT + OAuth)",
+            "Menu & Orders system",
+            "AI chatbot + reasoning engine",
+            "Delivery tracking system",
+            "Wallet + rewards system",
+            "WebAuthn login support",
+            "Admin moderation tools",
+            "Real-time notifications",
+            "Social engagement system",
+            "User appeals system",
+        ],
     }
