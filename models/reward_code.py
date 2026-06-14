@@ -33,10 +33,13 @@ class RewardCode(Document):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     class Settings:
-        name = "reward_codes"
-        indexes = [
-            "user_id",
-            "code",                       # unique index set in migration
-            [("user_id", 1), ("used", 1)],
-            [("user_id", 1), ("created_at", -1)],
-        ]
+    name = "reward_codes"
+    indexes = [
+        "user_id",
+        # "code" removed — the unique index on this field is owned by
+        # database.py (create_index with unique=True). Keeping it here
+        # caused Beanie to register a conflicting non-unique index on
+        # every startup (IndexKeySpecsConflict, error 86).
+        [("user_id", 1), ("used", 1)],
+        [("user_id", 1), ("created_at", -1)],
+    ]
