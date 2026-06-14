@@ -12,7 +12,7 @@ from models.social_interaction import (
 )
 
 from models.user import User
-from dependencies import get_current_active_user
+from dependencies import get_current_user
 
 router = APIRouter(prefix="/social", tags=["Social"])
 
