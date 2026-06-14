@@ -65,23 +65,20 @@ async def add_comment(data: CommentCreate, user: User = Depends(get_current_user
         reply = await interaction.add_reply(
             data.parent_comment_id,
             str(user.id),
-            user.name or "user",
+            user.full_name or "user",          # ← was user.name
             data.content,
-            getattr(user, "avatar_url", None),
+            user.picture,                       # ← was getattr(user, "avatar_url", None)
         )
-
         if not reply:
             raise HTTPException(404, "Parent comment not found")
-
         return {"reply": reply.model_dump(), "item_id": data.item_id}
 
     comment = await interaction.add_comment(
         str(user.id),
-        user.name or "user",
+        user.full_name or "user",              # ← was user.name
         data.content,
-        getattr(user, "avatar_url", None),
+        user.picture,                          # ← was getattr(user, "avatar_url", None)
     )
-
     return {
         "comment": map_comment(comment, str(user.id)),
         "item_id": data.item_id,
