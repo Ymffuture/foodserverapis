@@ -192,34 +192,54 @@ async def bookmark(data: BookmarkToggle, user: User = Depends(get_current_user))
 # STATS
 # ─────────────────────────────────────────────
 
+# GET /social/stats/{item_id}  — fetched on mount
 @router.get("/stats/{item_id}")
-async def stats(
-    item_id: str,
-    item_type: str = Query(...),
-    user: Optional[User] = Depends(get_current_user),
-):
-    interaction = await SocialInteraction.find_one({
-        "item_id": item_id,
-        "item_type": item_type,
-    })
-
+async def get_stats(item_id: str, item_type: str, user: User = Depends(get_current_user)):
+    interaction = await SocialInteraction.find_one(
+        {"item_id": item_id, "item_type": item_type}
+    )
     if not interaction:
-        return {
-            "likes": 0,
-            "comments": 0,
-            "shares": 0,
-            "bookmarks": 0,
-            "user_liked": False,
-            "user_bookmarked": False,
-        }
-
-    uid = str(user.id) if user else None
-
+        return {"likes": 0, "comments": 0, "shares": 0, "bookmarks": 0,
+                "user_liked": False, "user_bookmarked": False}
+    uid = str(user.id)
     return {
         "likes": interaction.likes,
         "comments": interaction.comment_count,
         "shares": interaction.share_count,
         "bookmarks": interaction.bookmark_count,
-        "user_liked": uid in interaction.liked_by if uid else False,
-        "user_bookmarked": uid in interaction.bookmarks if uid else False,
+        "user_liked": uid in interaction.liked_by,
+        "user_bookmarked": uid in interaction.bookmarks,
     }
+
+# GET /social/comments/{item_id}  — fetched when thread opens
+@router.get("/comments/{item_id}")
+async def get_comments(item_id: str, item_type: str, limit: int = 50,
+                        user: User = Depends(get_current_user)):
+    interaction = await SocialInteraction.find_one(
+        {"item_id": item_id, "item_type": item_type}
+    )
+    if not interaction:
+        return {"comments": []}
+    uid = str(user.id)
+    active = [c for c in interaction.comments if not c.is_deleted][-limit:]
+    return {"comments": [map_comment(c, uid) for c in reversed(active)]}
+
+# PATCH /social/comment/{comment_id}  — edit (was missing, caused silent 404)
+@router.patch("/comment/{comment_id}")
+async def edit_comment(comment_id: str, body: CommentEdit,
+                        user: User = Depends(get_current_user)):
+    interaction = await SocialInteraction.find_one(
+        {"comments.id": comment_id}
+    )
+    if not interaction:
+        raise HTTPException(404, "Comment not found")
+    for c in interaction.comments:
+        if c.id == comment_id:
+            if c.user_id != str(user.id):
+                raise HTTPException(403, "Not your comment")
+            c.content = body.content
+            c.is_edited = True
+            c.edited_at = datetime.utcnow()
+            await interaction.save()
+            return {"ok": True}
+    raise HTTPException(404, "Comment not found")
