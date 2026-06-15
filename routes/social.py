@@ -1,7 +1,20 @@
-# backend/routes/social.py
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+# ============================================================
+# Imports
+# ============================================================
+
+from datetime import datetime
 from typing import Optional
 
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+)
+
+from dependencies import get_current_user
+
+from models.user import User
 from models.social_interaction import (
     SocialInteraction,
     LikeToggle,
@@ -11,40 +24,76 @@ from models.social_interaction import (
     BookmarkToggle,
 )
 
-from models.user import User
-from dependencies import get_current_user
+# ============================================================
+# Router
+# ============================================================
 
-router = APIRouter(prefix="/social", tags=["Social"])
+router = APIRouter(
+    prefix="/social",
+    tags=["Social"],
+)
+
+# ============================================================
+# Helpers
+# ============================================================
+
+def get_user_id(user: User) -> str:
+    return str(user.id)
 
 
-# ─────────────────────────────────────────────
-# HELPERS
-# ─────────────────────────────────────────────
-
-def map_comment(c, user_id=None):
+def map_comment(comment, user_id: Optional[str] = None):
     return {
-        "id": c.id,
-        "user_id": c.user_id,
-        "user_name": c.user_name,
-        "user_avatar_url": c.user_avatar_url,
-        "content": c.content,
-        "likes": c.likes,
-        "liked_by": c.liked_by,
-        "created_at": c.created_at.isoformat(),
-        "is_edited": c.is_edited,
-        "user_liked": user_id in c.liked_by if user_id else False,
+        "id": comment.id,
+        "user_id": comment.user_id,
+        "user_name": comment.user_name,
+        "user_avatar_url": comment.user_avatar_url,
+        "content": comment.content,
+        "likes": comment.likes,
+        "liked_by": comment.liked_by,
+        "created_at": comment.created_at.isoformat(),
+        "is_edited": comment.is_edited,
+        "user_liked": (
+            user_id in comment.liked_by
+            if user_id
+            else False
+        ),
     }
 
 
-# ─────────────────────────────────────────────
-# LIKE
-# ─────────────────────────────────────────────
+async def get_interaction(
+    item_id: str,
+    item_type: str,
+):
+    return await SocialInteraction.get_or_create(
+        item_id,
+        item_type,
+    )
+
+
+async def find_interaction_by_comment(
+    comment_id: str,
+):
+    return await SocialInteraction.find_one(
+        {"comments.id": comment_id}
+    )
+
+# ============================================================
+# Likes
+# ============================================================
 
 @router.post("/like")
-async def toggle_like(data: LikeToggle, user: User = Depends(get_current_user)):
-    interaction = await SocialInteraction.get_or_create(data.item_id, data.item_type)
+async def toggle_like(
+    data: LikeToggle,
+    user: User = Depends(get_current_user),
+):
+    interaction = await get_interaction(
+        data.item_id,
+        data.item_type,
+    )
 
-    result = await interaction.toggle_like(str(user.id))
+    result = await interaction.toggle_like(
+        get_user_id(user)
+    )
 
     return {
         "liked": result["liked"],
@@ -52,35 +101,52 @@ async def toggle_like(data: LikeToggle, user: User = Depends(get_current_user)):
         "item_id": data.item_id,
     }
 
-
-# ─────────────────────────────────────────────
-# COMMENTS
-# ─────────────────────────────────────────────
+# ============================================================
+# Comments
+# ============================================================
 
 @router.post("/comment")
-async def add_comment(data: CommentCreate, user: User = Depends(get_current_user)):
-    interaction = await SocialInteraction.get_or_create(data.item_id, data.item_type)
+async def add_comment(
+    data: CommentCreate,
+    user: User = Depends(get_current_user),
+):
+    interaction = await get_interaction(
+        data.item_id,
+        data.item_type,
+    )
+
+    uid = get_user_id(user)
 
     if data.parent_comment_id:
+
         reply = await interaction.add_reply(
             data.parent_comment_id,
-            str(user.id),
-            user.full_name or "user",          # ← was user.name
+            uid,
+            user.full_name or "User",
             data.content,
-            user.picture,                       # ← was getattr(user, "avatar_url", None)
+            user.picture,
         )
+
         if not reply:
-            raise HTTPException(404, "Parent comment not found")
-        return {"reply": reply.model_dump(), "item_id": data.item_id}
+            raise HTTPException(
+                status_code=404,
+                detail="Parent comment not found",
+            )
+
+        return {
+            "reply": reply.model_dump(),
+            "item_id": data.item_id,
+        }
 
     comment = await interaction.add_comment(
-        str(user.id),
-        user.full_name or "user",              # ← was user.name
+        uid,
+        user.full_name or "User",
         data.content,
-        user.picture,                          # ← was getattr(user, "avatar_url", None)
+        user.picture,
     )
+
     return {
-        "comment": map_comment(comment, str(user.id)),
+        "comment": map_comment(comment, uid),
         "item_id": data.item_id,
     }
 
@@ -91,78 +157,177 @@ async def get_comments(
     item_type: str = Query(...),
     page: int = 1,
     limit: int = 20,
-    user: Optional[User] = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     interaction = await SocialInteraction.find_one({
         "item_id": item_id,
-        "item_type": item_type
+        "item_type": item_type,
     })
 
     if not interaction:
         return {
             "comments": [],
-            "pagination": {"page": 1, "limit": limit, "total": 0, "pages": 0},
+            "pagination": {
+                "page": page,
+                "limit": limit,
+                "total": 0,
+                "pages": 0,
+            },
             "total_comments": 0,
         }
 
-    comments = [c for c in interaction.comments if not c.is_deleted]
-    comments.sort(key=lambda x: x.created_at, reverse=True)
+    comments = [
+        c
+        for c in interaction.comments
+        if not c.is_deleted
+    ]
+
+    comments.sort(
+        key=lambda x: x.created_at,
+        reverse=True,
+    )
 
     start = (page - 1) * limit
     end = start + limit
 
-    paginated = comments[start:end]
-
     return {
-        "comments": [map_comment(c, str(user.id) if user else None) for c in paginated],
+        "comments": [
+            map_comment(
+                comment,
+                get_user_id(user),
+            )
+            for comment in comments[start:end]
+        ],
         "pagination": {
             "page": page,
             "limit": limit,
             "total": len(comments),
-            "pages": (len(comments) + limit - 1) // limit,
+            "pages": (
+                len(comments) + limit - 1
+            ) // limit,
         },
         "total_comments": interaction.comment_count,
     }
 
+# ============================================================
+# Comment Actions
+# ============================================================
 
-@router.delete("/comment/{comment_id}")
-async def delete_comment(comment_id: str, user: User = Depends(get_current_user)):
-    interaction = await SocialInteraction.find_one({"comments.id": comment_id})
+@router.patch("/comment/{comment_id}")
+async def edit_comment(
+    comment_id: str,
+    body: CommentEdit,
+    user: User = Depends(get_current_user),
+):
+    interaction = await find_interaction_by_comment(
+        comment_id
+    )
 
     if not interaction:
-        raise HTTPException(404, "Comment not found")
+        raise HTTPException(
+            404,
+            "Comment not found",
+        )
 
-    ok = await interaction.delete_comment(comment_id, str(user.id))
+    uid = get_user_id(user)
 
-    if not ok:
-        raise HTTPException(403, "Not allowed")
+    for comment in interaction.comments:
 
-    return {"message": "deleted"}
+        if comment.id != comment_id:
+            continue
+
+        if comment.user_id != uid:
+            raise HTTPException(
+                403,
+                "Not your comment",
+            )
+
+        comment.content = body.content
+        comment.is_edited = True
+        comment.edited_at = datetime.utcnow()
+
+        await interaction.save()
+
+        return {"ok": True}
+
+    raise HTTPException(
+        404,
+        "Comment not found",
+    )
+
+
+@router.delete("/comment/{comment_id}")
+async def delete_comment(
+    comment_id: str,
+    user: User = Depends(get_current_user),
+):
+    interaction = await find_interaction_by_comment(
+        comment_id
+    )
+
+    if not interaction:
+        raise HTTPException(
+            404,
+            "Comment not found",
+        )
+
+    deleted = await interaction.delete_comment(
+        comment_id,
+        get_user_id(user),
+    )
+
+    if not deleted:
+        raise HTTPException(
+            403,
+            "Not allowed",
+        )
+
+    return {
+        "message": "Comment deleted",
+    }
 
 
 @router.post("/comment/{comment_id}/like")
-async def like_comment(comment_id: str, user: User = Depends(get_current_user)):
-    interaction = await SocialInteraction.find_one({"comments.id": comment_id})
+async def like_comment(
+    comment_id: str,
+    user: User = Depends(get_current_user),
+):
+    interaction = await find_interaction_by_comment(
+        comment_id
+    )
 
     if not interaction:
-        raise HTTPException(404, "Not found")
+        raise HTTPException(
+            404,
+            "Comment not found",
+        )
 
-    await interaction.like_comment(comment_id, str(user.id))
+    await interaction.like_comment(
+        comment_id,
+        get_user_id(user),
+    )
 
-    return {"message": "liked"}
+    return {
+        "message": "Comment liked",
+    }
 
-
-# ─────────────────────────────────────────────
-# SHARE
-# ─────────────────────────────────────────────
+# ============================================================
+# Shares
+# ============================================================
 
 @router.post("/share")
-async def share(data: ShareRecordCreate, user: Optional[User] = Depends(get_current_user)):
-    interaction = await SocialInteraction.get_or_create(data.item_id, data.item_type)
+async def share(
+    data: ShareRecordCreate,
+    user: Optional[User] = Depends(get_current_user),
+):
+    interaction = await get_interaction(
+        data.item_id,
+        data.item_type,
+    )
 
     result = await interaction.record_share(
         data.platform,
-        str(user.id) if user else None,
+        get_user_id(user) if user else None,
     )
 
     return {
@@ -170,16 +335,23 @@ async def share(data: ShareRecordCreate, user: Optional[User] = Depends(get_curr
         "total_shares": result["total_shares"],
     }
 
-
-# ─────────────────────────────────────────────
-# BOOKMARK
-# ─────────────────────────────────────────────
+# ============================================================
+# Bookmarks
+# ============================================================
 
 @router.post("/bookmark")
-async def bookmark(data: BookmarkToggle, user: User = Depends(get_current_user)):
-    interaction = await SocialInteraction.get_or_create(data.item_id, data.item_type)
+async def bookmark(
+    data: BookmarkToggle,
+    user: User = Depends(get_current_user),
+):
+    interaction = await get_interaction(
+        data.item_id,
+        data.item_type,
+    )
 
-    result = await interaction.toggle_bookmark(str(user.id))
+    result = await interaction.toggle_bookmark(
+        get_user_id(user)
+    )
 
     return {
         "bookmarked": result["bookmarked"],
@@ -187,21 +359,33 @@ async def bookmark(data: BookmarkToggle, user: User = Depends(get_current_user))
         "item_id": data.item_id,
     }
 
+# ============================================================
+# Stats
+# ============================================================
 
-# ─────────────────────────────────────────────
-# STATS
-# ─────────────────────────────────────────────
-
-# GET /social/stats/{item_id}  — fetched on mount
 @router.get("/stats/{item_id}")
-async def get_stats(item_id: str, item_type: str, user: User = Depends(get_current_user)):
-    interaction = await SocialInteraction.find_one(
-        {"item_id": item_id, "item_type": item_type}
-    )
+async def get_stats(
+    item_id: str,
+    item_type: str,
+    user: User = Depends(get_current_user),
+):
+    interaction = await SocialInteraction.find_one({
+        "item_id": item_id,
+        "item_type": item_type,
+    })
+
     if not interaction:
-        return {"likes": 0, "comments": 0, "shares": 0, "bookmarks": 0,
-                "user_liked": False, "user_bookmarked": False}
-    uid = str(user.id)
+        return {
+            "likes": 0,
+            "comments": 0,
+            "shares": 0,
+            "bookmarks": 0,
+            "user_liked": False,
+            "user_bookmarked": False,
+        }
+
+    uid = get_user_id(user)
+
     return {
         "likes": interaction.likes,
         "comments": interaction.comment_count,
@@ -210,36 +394,3 @@ async def get_stats(item_id: str, item_type: str, user: User = Depends(get_curre
         "user_liked": uid in interaction.liked_by,
         "user_bookmarked": uid in interaction.bookmarks,
     }
-
-# GET /social/comments/{item_id}  — fetched when thread opens
-@router.get("/comments/{item_id}")
-async def get_comments(item_id: str, item_type: str, limit: int = 50,
-                        user: User = Depends(get_current_user)):
-    interaction = await SocialInteraction.find_one(
-        {"item_id": item_id, "item_type": item_type}
-    )
-    if not interaction:
-        return {"comments": []}
-    uid = str(user.id)
-    active = [c for c in interaction.comments if not c.is_deleted][-limit:]
-    return {"comments": [map_comment(c, uid) for c in reversed(active)]}
-
-# PATCH /social/comment/{comment_id}  — edit (was missing, caused silent 404)
-@router.patch("/comment/{comment_id}")
-async def edit_comment(comment_id: str, body: CommentEdit,
-                        user: User = Depends(get_current_user)):
-    interaction = await SocialInteraction.find_one(
-        {"comments.id": comment_id}
-    )
-    if not interaction:
-        raise HTTPException(404, "Comment not found")
-    for c in interaction.comments:
-        if c.id == comment_id:
-            if c.user_id != str(user.id):
-                raise HTTPException(403, "Not your comment")
-            c.content = body.content
-            c.is_edited = True
-            c.edited_at = datetime.utcnow()
-            await interaction.save()
-            return {"ok": True}
-    raise HTTPException(404, "Comment not found")
