@@ -15,31 +15,25 @@ class RewardCode(Document):
     Points are deducted at claim-time (not at checkout),
     matching the original UI behaviour.
     """
-    user_id: str                          # User who owns this code
-    code: str                             # e.g. "KBXYZ123"  – unique
+    user_id: str
+    code: str
 
-    # Reward details
-    discount: float                       # Rand value: 25 | 50 | 120
-    points_spent: int                     # KotaPoints deducted at claim
-    label: str                            # "R25 Off" | "R50 Off" | "R120 Off"
+    discount: float
+    points_spent: int
+    label: str
 
-    # Lifecycle
     used: bool = False
     used_at: Optional[datetime] = None
-    applied_order_id: Optional[str] = None   # Order the code was redeemed on
+    applied_order_id: Optional[str] = None
 
-    # Validity window
     expires_at: datetime = Field(default_factory=_default_expires)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     class Settings:
-    name = "reward_codes"
-    indexes = [
-        "user_id",
-        # "code" removed — the unique index on this field is owned by
-        # database.py (create_index with unique=True). Keeping it here
-        # caused Beanie to register a conflicting non-unique index on
-        # every startup (IndexKeySpecsConflict, error 86).
-        [("user_id", 1), ("used", 1)],
-        [("user_id", 1), ("created_at", -1)],
-    ]
+        name = "reward_codes"
+        indexes = [
+            "user_id",
+            # "code" removed — unique index is owned by database.py
+            [("user_id", 1), ("used", 1)],
+            [("user_id", 1), ("created_at", -1)],
+        ]
