@@ -16,7 +16,7 @@ class RewardCode(Document):
     matching the original UI behaviour.
     """
     user_id: str                          # User who owns this code
-    code_kb: str                             # e.g. "KBXYZ123"  – unique
+    code: str                             # e.g. "KBXYZ123"  – unique
 
     # Reward details
     discount: float                       # Rand value: 25 | 50 | 120
