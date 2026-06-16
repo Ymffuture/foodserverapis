@@ -330,6 +330,7 @@ async def verify_authentication(body: VerifyAuthBody):
         "access_token": create_access_token({"sub": user.email}),
         "token_type":   "bearer",
         "email":        user.email,
+        "id":             str(user.id),
         "full_name":    user.full_name,
     }
 
