@@ -23,7 +23,11 @@ from models.social_interaction import (
     ShareRecordCreate,
     BookmarkToggle,
 )
+import logging
+from models.notification import AppNotification, NotificationType, NotificationTarget
+from models.menu import MenuItem
 
+logger = logging.getLogger(__name__)
 # ============================================================
 # Router
 # ============================================================
@@ -36,7 +40,18 @@ router = APIRouter(
 # ============================================================
 # Helpers
 # ============================================================
-
+async def _resolve_item_label(item_id: str, item_type: str) -> str:
+    """Human-readable label for the item the comment lives on."""
+    if item_type == "menu_item":
+        try:
+            item = await MenuItem.get(item_id)
+            if item:
+                return f'"{item.name}"'
+        except Exception:
+            pass
+    # fallback: "Menu Item", "Order", etc.
+    return item_type.replace("_", " ").title()
+    
 def get_user_id(user: User) -> str:
     return str(user.id)
 
@@ -287,28 +302,116 @@ async def delete_comment(
     }
 
 
+
+
+# ── REPLACE the existing like_comment endpoint ────────────────────────────
+
 @router.post("/comment/{comment_id}/like")
+
 async def like_comment(
+
     comment_id: str,
+
     user: User = Depends(get_current_user),
+
 ):
-    interaction = await find_interaction_by_comment(
-        comment_id
-    )
+
+    interaction = await find_interaction_by_comment(comment_id)
 
     if not interaction:
-        raise HTTPException(
-            404,
-            "Comment not found",
-        )
 
-    await interaction.like_comment(
-        comment_id,
-        get_user_id(user),
-    )
+        raise HTTPException(404, "Comment not found")
+
+
+
+    liker_id   = get_user_id(user)
+
+    liked      = await interaction.like_comment(comment_id, liker_id)
+
+
+
+    # ── Notify comment owner only when LIKING (not un-liking)
+
+    #    and never notify someone for liking their own comment
+
+    if liked:
+
+        for comment in interaction.comments:
+
+            if comment.id != comment_id or comment.is_deleted:
+
+                continue
+
+
+
+            if comment.user_id == liker_id:
+
+                break  # own comment — no notification
+
+
+
+            try:
+
+                item_label  = await _resolve_item_label(
+
+                    interaction.item_id, interaction.item_type
+
+                )
+
+                snippet     = comment.content[:60] + (
+
+                    "…" if len(comment.content) > 60 else ""
+
+                )
+
+                liker_name  = user.full_name or user.email
+
+
+
+                await AppNotification(
+
+                    title          = f"❤️ {liker_name} liked your comment",
+
+                    message        = f'On {item_label}: "{snippet}"',
+
+                    type           = NotificationType.INFO,
+
+                    target         = NotificationTarget.SPECIFIC,
+
+                    target_user_id = comment.user_id,
+
+                    created_by     = liker_id,
+
+                    created_by_name= liker_name,
+
+                ).insert()
+
+
+
+                logger.info(
+
+                    f"Like notification → user {comment.user_id} "
+
+                    f"from {liker_name} on {interaction.item_type}/{interaction.item_id}"
+
+                )
+
+            except Exception as e:
+
+                # Never fail the like because of a notification error
+
+                logger.warning(f"Like notification failed: {e}")
+
+            break
+
+
 
     return {
-        "message": "Comment liked",
+
+        "message": "Comment liked" if liked else "Comment unliked",
+
+        "liked"  : liked,   # ← now returned so frontend knows direction
+
     }
 
 # ============================================================
