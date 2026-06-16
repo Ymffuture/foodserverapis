@@ -90,6 +90,7 @@ def _oauth_response(user: User) -> dict:
         "user": {
             "email":          user.email,
             "full_name":      user.full_name,
+            "id":             str(user.id),
             "picture":        user.picture or "",
             "email_verified": user.email_verified,
         },
@@ -138,6 +139,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     return {
         "access_token": create_access_token({"sub": user.email}),
         "token_type":   "bearer",
+        "id":             str(user.id),
         "email":        user.email,
         "full_name":    user.full_name,
         "email_verified": user.email_verified,
