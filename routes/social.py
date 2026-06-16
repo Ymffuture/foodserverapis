@@ -65,7 +65,7 @@ def map_comment(comment, user_id: Optional[str] = None):
         "content": comment.content,
         "likes": comment.likes,
         "liked_by": comment.liked_by,
-        "created_at": comment.created_at.isoformat(),
+        "created_at": comment.created_at.isoformat() +"Z", 
         "is_edited": comment.is_edited,
         "user_liked": (
             user_id in comment.liked_by
