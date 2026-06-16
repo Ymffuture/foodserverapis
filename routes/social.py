@@ -366,7 +366,7 @@ async def bookmark(
 @router.get("/stats/{item_id}")
 async def get_stats(
     item_id: str,
-    item_type: str,
+    item_type: str = "menu_item",   # ← safe default
     user: User = Depends(get_current_user),
 ):
     interaction = await SocialInteraction.find_one({
