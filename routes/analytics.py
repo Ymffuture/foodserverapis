@@ -13,7 +13,7 @@ from collections import Counter
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from dependencies import get_current_user
+from dependencies import get_current_user, get_current_admin_user
 from models.user import User
 from models.suggestion import Suggestion
 from models.order import Order
@@ -111,12 +111,10 @@ def _parse_sentiment(message: str) -> str:
 async def _fetch_suggestions_for_period(
     start: datetime,
     end: datetime,
-    current_user: User
 ) -> list[Suggestion]:
-    """Fetch user's suggestions within date range"""
+    """Fetch ALL customers' suggestions within date range (admin-wide view)"""
     try:
         suggestions = await Suggestion.find({
-            "user_id": str(current_user.id),
             "created_at": {"$gte": start, "$lte": end}
         }).to_list(length=1000)
         return suggestions
@@ -177,7 +175,7 @@ def _calculate_metrics(suggestions: list[Suggestion]) -> dict:
 @router.get("/dashboard", response_model=AnalyticsResponse)
 async def get_analytics_dashboard(
     range: str = Query("7d", regex="^(7d|30d|all)$"),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_admin_user), 
 ) -> AnalyticsResponse:
     """
     Get analytics dashboard data for the current user.
@@ -192,8 +190,8 @@ async def get_analytics_dashboard(
     
     try:
         # Fetch suggestions for this user
-        suggestions = await _fetch_suggestions_for_period(start, end, current_user)
-        
+        suggestions = await _fetch_suggestions_for_period(start, end)   # no user filter
+
         # Calculate metrics
         metrics = _calculate_metrics(suggestions)
         
@@ -253,7 +251,7 @@ async def get_analytics_dashboard(
 @router.get("/suggestions/summary")
 async def get_suggestions_summary(
     range: str = Query("30d", regex="^(7d|30d|all)$"),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_admin_user)
 ):
     """Get summary of user's suggestions within a time range"""
     
@@ -274,7 +272,7 @@ async def get_suggestions_summary(
 @router.get("/menu/trending")
 async def get_trending_items(
     range: str = Query("7d", regex="^(7d|30d|all)$"),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_admin_user)
 ):
     """Get trending menu items based on chat mentions"""
     
