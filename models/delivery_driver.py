@@ -40,6 +40,16 @@ class DeliveryDriver(Document):
     license_document_url: Optional[str] = None
     vehicle_document_url: Optional[str] = None
     profile_photo_url: Optional[str] = None
+
+    # ID Verification (automatic check at signup time, via Gemini vision OCR)
+    # True  = the ID number printed on the document matched what the
+    #         applicant typed in `id_number`
+    # None  = inconclusive (image unreadable, or check unavailable) —
+    #         NOT a mismatch, just flagged for manual admin review.
+    # A confirmed mismatch blocks signup entirely, so it never persists here.
+    id_document_verified: Optional[bool] = None
+    license_verified: Optional[bool] = None
+    id_verification_notes: Optional[str] = None   # human-readable summary for admin review
     
     # Address
     street_address: str
