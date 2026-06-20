@@ -32,6 +32,7 @@ from schemas.delivery_schema import (
     RateDriver,
 )
 from services.cloudinary_service import upload_image
+from services.id_verification_service import verify_id_number_in_document, IdCheckResult
 
 router = APIRouter(prefix="/delivery", tags=["Delivery"])
 logger = logging.getLogger(__name__)
@@ -91,7 +92,48 @@ async def create_wallet_transaction(
     return transaction
 
 
+def _verification_note(label: str, check: IdCheckResult) -> str:
+    """Human-readable summary of an ID-number check, for admin review notes."""
+    if check.checked and check.found and check.matched:
+        return f"{label}: ID number verified ✓"
+    if check.checked and not check.found:
+        return f"{label}: number not clearly readable — flagged for manual review"
+    return f"{label}: automatic check unavailable — flagged for manual review"
+
+
 # ── Driver Signup & Profile ───────────────────────────────────────────────
+
+@router.post("/verify-document")
+async def verify_document(
+    id_number: str = Form(...),
+    document: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Instant check used by the signup form right after a file is chosen (or
+    the ID number field is edited): reads the ID number printed on the
+    uploaded ID/license photo and compares it to the ID number typed into
+    the form, before the applicant submits the whole application.
+
+    This does NOT persist anything — `/signup` re-runs the same check
+    server-side as the authoritative gate.
+    """
+    content = await document.read()
+
+    check = await verify_id_number_in_document(content, document.content_type or "image/jpeg", id_number)
+
+    if not check.checked:
+        return {"checked": False, "found": False, "matched": None,
+                "message": "Couldn't auto-verify this document right now — it'll be checked manually."}
+    if not check.found:
+        return {"checked": True, "found": False, "matched": None,
+                "message": "Couldn't read an ID number clearly on this photo. Make sure it's well-lit and in focus."}
+    if check.matched:
+        return {"checked": True, "found": True, "matched": True, "extracted": check.extracted,
+                "message": "ID number matches ✓"}
+    return {"checked": True, "found": True, "matched": False, "extracted": check.extracted,
+            "message": f"This document shows ID number {check.extracted}, which doesn't match what you entered."}
+
 
 @router.post("/signup", response_model=DriverSignupResponse, status_code=201)
 async def driver_signup(
@@ -122,6 +164,50 @@ async def driver_signup(
     except ValueError:
         raise HTTPException(422, f"Invalid vehicle type. Allowed: {[v.value for v in VehicleType]}")
 
+    # ── Cross-check typed ID number against the uploaded ID doc / license ──
+    # Reads each image with Gemini 2.5 Flash vision (same client/API key as
+    # routes/reasoning.py) and compares the number it finds to `id_number`.
+    # This is the authoritative, server-side gate — the frontend's
+    # /verify-document calls are just an early heads-up for the applicant
+    # and can't be relied on alone (a direct API call would skip them).
+    #
+    # A CONFIRMED mismatch blocks signup. An unreadable image does NOT
+    # block signup — it's flagged in id_verification_notes for manual admin
+    # review instead, since OCR can fail on a legitimate photo (glare,
+    # angle, low-res scan, etc.) and we don't want to reject real drivers
+    # over an imaging problem.
+    id_doc_verified: Optional[bool] = None
+    license_doc_verified: Optional[bool] = None
+    verification_notes: List[str] = []
+
+    if id_document:
+        id_bytes = await id_document.read()
+        await id_document.seek(0)   # rewind so upload_image() below can re-read it
+        check = await verify_id_number_in_document(id_bytes, id_document.content_type or "image/jpeg", id_number)
+        if check.checked and check.found and check.matched is False:
+            raise HTTPException(
+                422,
+                f"The ID number on your uploaded ID document looks like {check.extracted}, "
+                f"which doesn't match the ID number you entered ({id_number}). "
+                f"Please check both and try again."
+            )
+        id_doc_verified = True if (check.checked and check.found and check.matched) else None
+        verification_notes.append(_verification_note("ID document", check))
+
+    if license_document:
+        lic_bytes = await license_document.read()
+        await license_document.seek(0)
+        check = await verify_id_number_in_document(lic_bytes, license_document.content_type or "image/jpeg", id_number)
+        if check.checked and check.found and check.matched is False:
+            raise HTTPException(
+                422,
+                f"The ID number on your uploaded driver's license looks like {check.extracted}, "
+                f"which doesn't match the ID number you entered ({id_number}). "
+                f"Please check both and try again."
+            )
+        license_doc_verified = True if (check.checked and check.found and check.matched) else None
+        verification_notes.append(_verification_note("Driver's license", check))
+
     id_url      = await upload_image(id_document)      if id_document      else None
     license_url = await upload_image(license_document) if license_document else None
     vehicle_url = await upload_image(vehicle_document) if vehicle_document else None
@@ -137,6 +223,9 @@ async def driver_signup(
         street_address=street_address, suburb=suburb, postal_code=postal_code,
         bank_name=bank_name, account_number=account_number, account_holder=account_holder,
         status=DriverStatus.PENDING,
+        id_document_verified=id_doc_verified,
+        license_verified=license_doc_verified,
+        id_verification_notes=" | ".join(verification_notes) if verification_notes else None,
     )
     await driver.insert()
     logger.info(f"New driver application: {driver.email} (ID: {driver.id})")
@@ -278,6 +367,10 @@ async def get_all_drivers(status: Optional[str] = None, admin_user: User = Depen
             "total_earned": d.total_earned, "total_deliveries": d.total_deliveries,
             "rating": d.rating, "is_available": d.is_available,
             "created_at": d.created_at, "approval_date": d.approval_date,
+            # ID-number auto-verification, surfaced for admin review
+            "id_document_verified": d.id_document_verified,
+            "license_verified": d.license_verified,
+            "id_verification_notes": d.id_verification_notes,
         }
         for d in drivers
     ]
@@ -506,23 +599,6 @@ async def get_available_orders(current_user: User = Depends(get_current_user)):
     if not orders:
         return []
 
-    # ✅ BUG FIX — the original code used an async set comprehension:
-    #
-    #   assigned_ids = {
-    #       a.order_id async for a in DeliveryAssignment.find(
-    #           DeliveryAssignment.status.in_([...])
-    #       )
-    #   }
-    #
-    # This raised an unhandled exception because:
-    #   (a) DeliveryAssignment.status.in_([...]) is not valid Beanie query syntax —
-    #       the correct approach is a raw MongoDB dict query {"status": {"$in": [...]}}
-    #   (b) Even if the query were valid, the async generator from find() cannot be
-    #       consumed inside a set comprehension without explicit await/.to_list().
-    #
-    # The exception propagated as a 500, which the frontend's catch block silently
-    # swallowed (showing "No orders available" rather than an error message), making
-    # it look like no READY orders existed even when the admin had set them correctly.
     active_assignments = await DeliveryAssignment.find({
         "status": {"$in": [
             AssignmentStatus.ACCEPTED.value,
@@ -574,7 +650,6 @@ async def accept_order(body: AcceptOrderRequest, current_user: User = Depends(ge
     if order.status != OrderStatus.READY:
         raise HTTPException(400, f"Order not ready ({order.status.value})")
 
-    # ✅ Same fix — use raw dict query + .to_list() instead of async comprehension
     existing = await DeliveryAssignment.find({
         "order_id": str(order.id),
         "status": {"$in": [
