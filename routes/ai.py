@@ -6,13 +6,14 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import AsyncGenerator, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from openai import AsyncOpenAI
 
 from dependencies import get_current_user, get_current_admin_user
+from services.file_reader_service import ALLOWED_MIME_TYPES, MAX_FILE_BYTES, read_attachment
 from models.user import User
 from models.order import Order
 from models.menu import MenuItem
@@ -1062,6 +1063,55 @@ async def ai_chat_stream(
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.post("/chat/read-file")
+async def ai_chat_read_file(
+    file: UploadFile = File(...),
+    question: Optional[str] = Form(None),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Lets a customer attach a file (image or PDF) to their KotaBot chat.
+
+    This is a pure file → text step — it does NOT touch chat history or
+    call OpenRouter. The frontend should call this first, then fold the
+    returned `description` into the next /chat (or /chat/stream) message,
+    e.g.:
+
+        "[Attached file: receipt.jpg]\\n<description>\\n\\nMy question: ..."
+
+    `question` is optional — pass the customer's accompanying message text
+    (e.g. "is this payment valid?") so Gemini's read stays relevant to
+    what they actually asked.
+    """
+    contents = await file.read()
+
+    if len(contents) > MAX_FILE_BYTES:
+        raise HTTPException(413, f"File too large — max {MAX_FILE_BYTES // (1024 * 1024)} MB")
+
+    mime_type = file.content_type or ""
+    if mime_type not in ALLOWED_MIME_TYPES:
+        raise HTTPException(
+            415,
+            f"'{mime_type or 'unknown'}' isn't supported — upload an image (jpg/png/webp) or PDF.",
+        )
+
+    result = await read_attachment(contents, mime_type, question or "")
+
+    if not result.ok:
+        raise HTTPException(422, result.reason or "Couldn't read that file.")
+
+    logger.info(
+        f"[file_reader] read {file.filename!r} ({mime_type}, {len(contents)} bytes) "
+        f"for {current_user.email}"
+    )
+
+    return {
+        "filename": file.filename,
+        "mime_type": mime_type,
+        "description": result.description,
+    }
 
 
 @router.post("/cancel-order")
