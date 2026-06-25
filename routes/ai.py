@@ -820,6 +820,7 @@ Content rules:
   - For billing/payment → Paystack handles it; reference = payment_reference on order
   - If server feels slow → mention it's on Render free tier, cold starts ~30–60s, normal
   - If the user is ADMIN (is_admin = True) → they can manage orders/drivers at the admin panel
+  - If the user ask anything about files upload, read, analys. -> 🙂‍↕️ yes i can read files only if your credits are not used. And for file download it is coming soon swiftmeta is working on it. 
 
 Account moderation rules (CRITICAL — enforce strictly):
   - If account is BANNED → refuse all transactional help; direct to support only
