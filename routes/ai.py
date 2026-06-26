@@ -820,7 +820,6 @@ Content rules:
   - For billing/payment → Paystack handles it; reference = payment_reference on order
   - If server feels slow → mention it's on Render free tier, cold starts ~30–60s, normal
   - If the user is ADMIN (is_admin = True) → they can manage orders/drivers at the admin panel
-  - If the user ask anything about files upload, read, analys. -> 🙂‍↕️ yes i can read files only if your credits are not used. And for file download it is coming soon swiftmeta is working on it. 
 
 Account moderation rules (CRITICAL — enforce strictly):
   - If account is BANNED → refuse all transactional help; direct to support only
@@ -1073,29 +1072,36 @@ async def ai_chat_read_file(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Lets a customer attach a file (image or PDF) to their KotaBot chat.
+    Lets a customer attach a file (image, PDF, or voice note) to their
+    KotaBot chat.
 
     This is a pure file → text step — it does NOT touch chat history or
-    call OpenRouter. The frontend should call this first, then fold the
-    returned `description` into the next /chat (or /chat/stream) message,
-    e.g.:
+    call OpenRouter. For images/PDFs, the frontend folds the returned
+    `description` into the next /chat (or /chat/stream) message as hidden
+    context, e.g.:
 
         "[Attached file: receipt.jpg]\\n<description>\\n\\nMy question: ..."
 
+    For voice notes (audio/*), `description` is a verbatim transcript
+    instead — the frontend drops it straight into the chat input for the
+    customer to review/edit before sending, so no folding needed there.
+
     `question` is optional — pass the customer's accompanying message text
     (e.g. "is this payment valid?") so Gemini's read stays relevant to
-    what they actually asked.
+    what they actually asked. Leave blank for voice notes.
     """
     contents = await file.read()
 
     if len(contents) > MAX_FILE_BYTES:
         raise HTTPException(413, f"File too large — max {MAX_FILE_BYTES // (1024 * 1024)} MB")
 
-    mime_type = file.content_type or ""
+    # Normalize away codec params browsers append, e.g. browser MediaRecorder
+    # often reports "audio/webm;codecs=opus" rather than the bare mime type.
+    mime_type = (file.content_type or "").split(";")[0].strip().lower()
     if mime_type not in ALLOWED_MIME_TYPES:
         raise HTTPException(
             415,
-            f"'{mime_type or 'unknown'}' isn't supported — upload an image (jpg/png/webp) or PDF.",
+            f"'{mime_type or 'unknown'}' isn't supported — upload an image, PDF, or voice note.",
         )
 
     result = await read_attachment(contents, mime_type, question or "")
