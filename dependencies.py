@@ -137,6 +137,10 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
     user = await User.find_one(User.email == email)
     if user is None:
         raise credentials_exception
+
+    from services.subscription_service import sync_expiry  # local import avoids any import-cycle risk
+    user = await sync_expiry(user)
+
     return user
 
 

@@ -9,6 +9,7 @@ from routes.admin_users  import router as admin_users_router
 from routes.notifications import router as notifications_router
 from routes.Users         import router as users_router
 from routes.appeals       import router as appeals_router              # ← NEW
+from routes.billing       import router as billing_router              # ← NEW (ProBite)
 # main.py
 from routes.social import router as social_router
 
@@ -49,6 +50,7 @@ app.include_router(notifications_router,                         tags=["Notifica
 app.include_router(users_router,                                 tags=["Users"])
 app.include_router(appeals_router,                               tags=["Appeals"])  # ← NEW
 app.include_router(social_router, tags=["Social"])
+app.include_router(billing_router, tags=["Billing"])  # ← NEW (ProBite)
 
 @app.get("/")
 def home():
@@ -66,5 +68,6 @@ def home():
             "Admin push notifications",
             "Account status & feature gating",
             "User appeal system",                                  # ← NEW
+            "ProBite subscriptions (Paystack) + KotaBot credit metering",  # ← NEW
         ]
     }
