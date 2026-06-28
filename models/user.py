@@ -4,6 +4,14 @@ from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List
 from datetime import datetime
 
+from utils.enums import SubscriptionPlan, BillingCycle, SubscriptionStatus
+
+# ── Bot-credit defaults (FREE plan) ─────────────────────────────────────────
+# Kept here (not in config.py) since they describe a *User* default, not a
+# secret/env value. Change freely — every free user reads these live.
+FREE_PLAN_CREDIT_CAP   = 20   # credits a free user holds at full refill
+FREE_PLAN_RESET_HOURS  = 5    # credits fully refill this often
+
 
 class UserWarning(BaseModel):
     """Embedded warning record stored inside the User document."""
@@ -54,6 +62,23 @@ class User(Document):
     admin_note: Optional[str] = None             # ← NEW
     # ── Meta ─────────────────────────────────────────────────────────────
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # ── ProBite subscription ────────────────────────────────────────────
+    plan: SubscriptionPlan = SubscriptionPlan.FREE
+    subscription_status: SubscriptionStatus = SubscriptionStatus.NONE
+    billing_cycle: Optional[BillingCycle] = None        # set only when plan == PROBITE
+    subscription_started_at: Optional[datetime] = None
+    subscription_expires_at: Optional[datetime] = None  # end of current paid period
+    subscription_cancel_at_period_end: bool = False     # user hit "cancel" — still PROBITE until expires_at
+
+    # Paystack refs (recurring billing) — never exposed to the frontend
+    paystack_customer_code: Optional[str] = None
+    paystack_authorization_code: Optional[str] = None    # reusable card token for renewals
+    paystack_subscription_code: Optional[str] = None
+
+    # ── Bot chat credits (FREE plan only — PROBITE = unlimited) ──────────
+    bot_credits: int = FREE_PLAN_CREDIT_CAP
+    bot_credits_reset_at: Optional[datetime] = None     # next time credits refill to the cap
 
     class Settings:
         name = "users"
