@@ -15,6 +15,7 @@ from fastapi import (
 from dependencies import get_current_user
 
 from models.user import User
+from utils.enums import SubscriptionPlan
 from models.social_interaction import (
     SocialInteraction,
     LikeToggle,
@@ -234,6 +235,15 @@ async def edit_comment(
     body: CommentEdit,
     user: User = Depends(get_current_user),
 ):
+    if user.plan != SubscriptionPlan.PROBITE:
+        raise HTTPException(
+            403,
+            {
+                "message": "Editing comments is a ProBite perk.",
+                "upgrade_hint": "Go ProBite to edit your comments anytime.",
+            },
+        )
+
     interaction = await find_interaction_by_comment(
         comment_id
     )
@@ -347,6 +357,14 @@ async def like_comment(
             if comment.user_id == liker_id:
 
                 break  # own comment — no notification
+
+
+
+            owner = await User.get(comment.user_id)
+
+            if not owner or owner.plan != SubscriptionPlan.PROBITE:
+
+                break  # like/comment notifications are a ProBite perk for the recipient
 
 
 
