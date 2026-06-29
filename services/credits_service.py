@@ -30,12 +30,18 @@ from models.user import User, FREE_PLAN_CREDIT_CAP, FREE_PLAN_RESET_HOURS
 from utils.enums import SubscriptionPlan
 
 # ── Cost table — tune freely, nothing else needs to change ─────────────────
-# (total_tokens upper bound, credit cost)
+# Bounds are COMPLETION tokens only (the reply KotaBot generated this turn) —
+# NOT total_tokens. total_tokens also includes the system prompt + the
+# entire resent conversation history, which has nothing to do with what
+# *this* message needed — it would make a one-word "hi" cost more as a
+# conversation gets longer, purely from fixed overhead. Billing the output
+# length instead means cost actually tracks "how much the request needed."
+# (completion_tokens upper bound, credit cost)
 _TOKEN_COST_TIERS: list[tuple[int, int]] = [
-    (300, 5),
-    (800, 8),
-    (1500, 12),
-    (3000, 18),
+    (100, 5),    # short reply — "Hi! How can I help?" type answers
+    (300, 8),
+    (700, 12),
+    (1500, 18),
 ]
 _MAX_TIER_COST = 24  # anything above the last tier's bound
 
@@ -47,12 +53,12 @@ def is_unlimited(user: User) -> bool:
     return user.plan == SubscriptionPlan.PROBITE
 
 
-def cost_for_tokens(total_tokens: Optional[int]) -> int:
-    """Map a completion's total token usage to a credit cost."""
-    if not total_tokens or total_tokens <= 0:
+def cost_for_tokens(completion_tokens: Optional[int]) -> int:
+    """Map a reply's completion-token count to a credit cost."""
+    if not completion_tokens or completion_tokens <= 0:
         return _TOKEN_COST_TIERS[0][1]  # unknown usage → cheapest tier, never free
     for bound, cost in _TOKEN_COST_TIERS:
-        if total_tokens <= bound:
+        if completion_tokens <= bound:
             return cost
     return _MAX_TIER_COST
 
@@ -113,9 +119,9 @@ async def charge(user: User, cost: int) -> User:
     return user
 
 
-async def charge_for_tokens(user: User, total_tokens: Optional[int]) -> int:
-    """Convenience: compute cost from token usage, charge it, return the cost charged."""
-    cost = cost_for_tokens(total_tokens)
+async def charge_for_tokens(user: User, completion_tokens: Optional[int]) -> int:
+    """Convenience: compute cost from completion tokens, charge it, return the cost charged."""
+    cost = cost_for_tokens(completion_tokens)
     await charge(user, cost)
     return cost
 
