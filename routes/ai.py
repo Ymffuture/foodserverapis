@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import AsyncGenerator, List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -14,6 +14,7 @@ from openai import AsyncOpenAI
 
 from dependencies import get_current_user, get_current_admin_user
 from services.file_reader_service import ALLOWED_MIME_TYPES, MAX_FILE_BYTES, read_attachment
+from services import credits_service
 from models.user import User
 from models.order import Order
 from models.menu import MenuItem
@@ -993,6 +994,11 @@ async def ai_chat(
     if not chat_messages:
         return {"reply": "Yebo! How can I help you today?"}
 
+    # FREE-plan credit gate — no-op for PROBITE. Placed here (not earlier)
+    # so canned replies above (closed hours, empty message) never cost a
+    # credit — only an actual model call does.
+    await credits_service.require_credits(current_user)
+
     try:
         response = await client.chat.completions.create(
             model=MODEL,
@@ -1016,9 +1022,17 @@ async def ai_chat(
 
         await _maybe_save_suggestion(req.messages, current_user)
 
+        usage = getattr(response, "usage", None)
+        total_tokens = getattr(usage, "total_tokens", None) if usage else None
+        credits_charged = await credits_service.charge_for_tokens(current_user, total_tokens)
+
         payload: dict = {"reply": reply}
         if cancel_result is not None:
             payload["cancel_result"] = cancel_result
+        payload["credits"] = {
+            "charged": credits_charged,
+            **(await credits_service.get_status(current_user)),
+        }
         return payload
 
     except Exception:
@@ -1043,23 +1057,46 @@ async def ai_chat_stream(
             yield "data: [DONE]\n\n"
         return StreamingResponse(_empty(), media_type="text/event-stream")
 
+    # FREE-plan credit gate — same as /chat, checked before streaming starts
+    # so a blocked user never opens a connection that goes nowhere.
+    await credits_service.require_credits(current_user)
+
     async def event_generator() -> AsyncGenerator[str, None]:
+        total_tokens: Optional[int] = None
+        reply_chars = 0
         try:
             stream = await client.chat.completions.create(
                 model=MODEL,
                 messages=[{"role": "system", "content": system_prompt}] + chat_messages,
                 temperature=0.7, max_tokens=4096,
-                extra_body={"thinking": {"type": "disabled"}},
+                extra_body={
+                    "thinking": {"type": "disabled"},
+                    "stream_options": {"include_usage": True},
+                },
                 stream=True,
             )
             async for chunk in stream:
+                usage = getattr(chunk, "usage", None)
+                if usage and getattr(usage, "total_tokens", None):
+                    total_tokens = usage.total_tokens
+
+                if not chunk.choices:
+                    continue  # final usage-only chunk has no choices
                 token = chunk.choices[0].delta.content
                 if token:
+                    reply_chars += len(token)
                     yield f"data: {json.dumps({'token': token})}\n\n"
         except Exception:
             logger.exception("Streaming error")
             yield f"data: {json.dumps({'error': 'AI service error'})}\n\n"
         finally:
+            # Charge even if the client disconnects mid-stream — the model
+            # call already happened. If OpenRouter didn't send a usage
+            # chunk, fall back to a rough chars→tokens estimate.
+            estimated_tokens = total_tokens or (reply_chars // 4 if reply_chars else None)
+            credits_charged = await credits_service.charge_for_tokens(current_user, estimated_tokens)
+            status = await credits_service.get_status(current_user)
+            yield f"data: {json.dumps({'credits': {'charged': credits_charged, **status}})}\n\n"
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
@@ -1069,6 +1106,17 @@ async def ai_chat_stream(
 async def ai_chat_read_file(
     file: UploadFile = File(...),
     question: Optional[str] = Form(None),
+    chained: bool = Query(
+        False,
+        description=(
+            "True when the frontend is about to immediately fold this result "
+            "into a /chat call (file-attach-then-send). False for a standalone "
+            "read (e.g. voice-note transcription dropped into the input box). "
+            "Chained reads aren't charged here — the longer prompt they "
+            "produce already raises the cost of the /chat call that follows; "
+            "charging both would bill the same attachment twice."
+        ),
+    ),
     current_user: User = Depends(get_current_user),
 ):
     """
@@ -1090,6 +1138,11 @@ async def ai_chat_read_file(
     (e.g. "is this payment valid?") so Gemini's read stays relevant to
     what they actually asked. Leave blank for voice notes.
     """
+    # FREE-plan credit gate. Still enforced even when chained=True — a user
+    # at 0 credits shouldn't get a free Gemini read just because /chat will
+    # reject them a moment later anyway.
+    await credits_service.require_credits(current_user)
+
     contents = await file.read()
 
     if len(contents) > MAX_FILE_BYTES:
@@ -1109,15 +1162,23 @@ async def ai_chat_read_file(
     if not result.ok:
         raise HTTPException(422, result.reason or "Couldn't read that file.")
 
+    await credits_service.charge(
+        current_user, 0 if chained else credits_service.COST_FILE_READ
+    )
+
     logger.info(
         f"[file_reader] read {file.filename!r} ({mime_type}, {len(contents)} bytes) "
-        f"for {current_user.email}"
+        f"for {current_user.email}{' [chained]' if chained else ''}"
     )
 
     return {
         "filename": file.filename,
         "mime_type": mime_type,
         "description": result.description,
+        "credits": {
+            "charged": 0 if chained else credits_service.COST_FILE_READ,
+            **(await credits_service.get_status(current_user)),
+        },
     }
 
 
