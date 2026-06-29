@@ -1023,8 +1023,8 @@ async def ai_chat(
         await _maybe_save_suggestion(req.messages, current_user)
 
         usage = getattr(response, "usage", None)
-        total_tokens = getattr(usage, "total_tokens", None) if usage else None
-        credits_charged = await credits_service.charge_for_tokens(current_user, total_tokens)
+        completion_tokens = getattr(usage, "completion_tokens", None) if usage else None
+        credits_charged = await credits_service.charge_for_tokens(current_user, completion_tokens)
 
         payload: dict = {"reply": reply}
         if cancel_result is not None:
@@ -1062,7 +1062,7 @@ async def ai_chat_stream(
     await credits_service.require_credits(current_user)
 
     async def event_generator() -> AsyncGenerator[str, None]:
-        total_tokens: Optional[int] = None
+        completion_tokens: Optional[int] = None
         reply_chars = 0
         try:
             stream = await client.chat.completions.create(
@@ -1077,8 +1077,8 @@ async def ai_chat_stream(
             )
             async for chunk in stream:
                 usage = getattr(chunk, "usage", None)
-                if usage and getattr(usage, "total_tokens", None):
-                    total_tokens = usage.total_tokens
+                if usage and getattr(usage, "completion_tokens", None):
+                    completion_tokens = usage.completion_tokens
 
                 if not chunk.choices:
                     continue  # final usage-only chunk has no choices
@@ -1092,8 +1092,9 @@ async def ai_chat_stream(
         finally:
             # Charge even if the client disconnects mid-stream — the model
             # call already happened. If OpenRouter didn't send a usage
-            # chunk, fall back to a rough chars→tokens estimate.
-            estimated_tokens = total_tokens or (reply_chars // 4 if reply_chars else None)
+            # chunk, fall back to a rough chars→tokens estimate — reply_chars
+            # is already completion-only (it's just the streamed delta text).
+            estimated_tokens = completion_tokens or (reply_chars // 4 if reply_chars else None)
             credits_charged = await credits_service.charge_for_tokens(current_user, estimated_tokens)
             status = await credits_service.get_status(current_user)
             yield f"data: {json.dumps({'credits': {'charged': credits_charged, **status}})}\n\n"
