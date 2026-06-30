@@ -10,7 +10,7 @@ from utils.enums import SubscriptionPlan, BillingCycle, SubscriptionStatus
 # Kept here (not in config.py) since they describe a *User* default, not a
 # secret/env value. Change freely — every free user reads these live.
 FREE_PLAN_CREDIT_CAP   = 100   # credits a free user holds at full refill
-FREE_PLAN_RESET_HOURS  = 5    # credits fully refill this often
+FREE_PLAN_RESET_HOURS  = 2    # credits fully refill this often
 
 
 class UserWarning(BaseModel):
