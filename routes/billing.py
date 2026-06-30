@@ -49,7 +49,7 @@ def _plan_code_for(cycle: BillingCycle) -> Optional[str]:
     return PAYSTACK_PLAN_CODE_MONTHLY if cycle == BillingCycle.MONTHLY else PAYSTACK_PLAN_CODE_YEARLY
 
 
-def _price_for(cycle: BillingCycle) -> int:
+def _price_for(cycle: BillingCycle) -> float:
     return PROBITE_PRICE_MONTHLY_ZAR if cycle == BillingCycle.MONTHLY else PROBITE_PRICE_YEARLY_ZAR
 
 
@@ -82,6 +82,9 @@ async def get_plans():
                     f"{credits_service.FREE_PLAN_CREDIT_CAP} KotaBot credits, refilling every "
                     f"{credits_service.FREE_PLAN_RESET_HOURS} hours",
                     "Like and comment on menu items",
+                    "Real-time order tracking",
+                    "KotaPoints rewards wallet — earn & redeem on every order",
+                    "Passkey / fingerprint sign-in",
                 ],
             },
             {
@@ -94,6 +97,7 @@ async def get_plans():
                     "Unlimited KotaBot chat — no credits, no waiting",
                     "Edit your comments anytime",
                     "Get notified on likes & replies to your comments",
+                    "Everything in Free",
                 ],
             },
         ]
