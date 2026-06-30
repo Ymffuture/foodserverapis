@@ -16,8 +16,8 @@ PAYSTACK_PUBLIC_KEY = os.getenv("PAYSTACK_PUBLIC_KEY")
 # PLACEHOLDER prices — swap these once pricing is finalised, nothing else
 # needs to change. Whole Rand amounts (Paystack wants an int, converted to
 # cents/kobo in paystack_service.py).
-PROBITE_PRICE_MONTHLY_ZAR = int(os.getenv("PROBITE_PRICE_MONTHLY_ZAR", 49))
-PROBITE_PRICE_YEARLY_ZAR  = int(os.getenv("PROBITE_PRICE_YEARLY_ZAR", 499))  # ~15% off vs 12×monthly
+PROBITE_PRICE_MONTHLY_ZAR = int(os.getenv("PROBITE_PRICE_MONTHLY_ZAR", 19))
+PROBITE_PRICE_YEARLY_ZAR  = int(os.getenv("PROBITE_PRICE_YEARLY_ZAR", 89))  # ~61% off vs 12×monthly
 
 # Plan codes from Paystack dashboard (Settings → Plans) or services.paystack_service.create_plan().
 # Subscriptions can't go live until these are set.
