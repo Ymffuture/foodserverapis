@@ -1,8 +1,9 @@
 # services/order_service.py
 from models.order import Order, OrderItem
 from models.menu import MenuItem
+from models.user import User
 from schemas.order_schema import OrderCreate
-from utils.enums import OrderStatus
+from utils.enums import OrderStatus, SubscriptionPlan
 from fastapi import HTTPException
 from datetime import datetime
 
@@ -15,12 +16,22 @@ def _calc_delivery_fee(subtotal: float) -> float:
     return 15.0
 
 
-# ── Payment method max limits ─────────────────────────────────────────────
-CASH_MAX = 150.0
-CARD_MAX = 250.0
+# ── Payment method max limits — MUST mirror Checkout.jsx (CASH_MAX/CARD_MAX)
+# and routes/ai.py (CASH_MAX_FREE/PROBITE, CARD_MAX_FREE/PROBITE). If any of
+# these three drift out of sync, KotaBot/the checkout page will quote a limit
+# the backend then rejects (this is exactly what was happening: every plan
+# was being charged the FREE-tier R150/R250 limit here, so a R700 ProBite
+# order — well under their real R3000 card limit — was hard-rejected).
+CASH_MAX_FREE,    CASH_MAX_PROBITE = 150.0, 2000.0
+CARD_MAX_FREE,    CARD_MAX_PROBITE = 250.0, 3000.0
 
 
-async def create_order(order_data: OrderCreate, user_id: str) -> Order:
+async def create_order(order_data: OrderCreate, user: User) -> Order:
+    user_id = str(user.id)
+    is_probite = user.plan == SubscriptionPlan.PROBITE
+    cash_max = CASH_MAX_PROBITE if is_probite else CASH_MAX_FREE
+    card_max = CARD_MAX_PROBITE if is_probite else CARD_MAX_FREE
+
     items = []
     subtotal = 0.0
 
@@ -60,16 +71,16 @@ async def create_order(order_data: OrderCreate, user_id: str) -> Order:
 
     # ── Payment method validation ──────────────────────────────────────
     payment_method = order_data.payment_method or "paystack"
-    if payment_method == "cash" and total_amount > CASH_MAX:
+    if payment_method == "cash" and total_amount > cash_max:
         raise HTTPException(
             status_code=422,
-            detail=f"Cash on delivery is only available for orders up to R{CASH_MAX:.0f}. "
+            detail=f"Cash on delivery is only available for orders up to R{cash_max:.0f}. "
                    f"Your total is R{total_amount:.2f}. Please pay online.",
         )
-    if payment_method == "paystack" and total_amount > CARD_MAX:
+    if payment_method == "paystack" and total_amount > card_max:
         raise HTTPException(
             status_code=422,
-            detail=f"Online payment is only available for orders up to R{CARD_MAX:.0f}. "
+            detail=f"Online payment is only available for orders up to R{card_max:.0f}. "
                    f"Your total is R{total_amount:.2f}. Please call us to arrange your order.",
         )
 
