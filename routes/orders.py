@@ -48,7 +48,7 @@ async def create_new_order(
     order: OrderCreate,
     current_user: User = Depends(get_current_user),
 ):
-    created = await create_order(order, str(current_user.id))
+    created = await create_order(order, current_user)
     return _serialize(created)
 
 
