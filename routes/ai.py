@@ -24,7 +24,7 @@ from models.delivery_assignment import DeliveryAssignment, AssignmentStatus
 from models.wallet_transaction import WalletTransaction
 from models.reward_code import RewardCode
 from models.notification import AppNotification, NotificationTarget   # ← NEW
-from utils.enums import OrderStatus
+from utils.enums import OrderStatus, SubscriptionPlan, SubscriptionStatus
 from utils.business_hours import get_status
 
 
@@ -35,7 +35,33 @@ logger.setLevel(logging.INFO)
 
 # ── OpenRouter Setup ───────────────────────────────────────────────────────
 KIMI_API_KEY = os.getenv("KIMI_API_KEY")
-MODEL = "nvidia/nemotron-3-nano-30b-a3b:free"
+DEFAULT_MODEL = "nvidia/nemotron-3-nano-30b-a3b:free"
+
+# Selectable models — all OpenRouter free-tier. id is what's sent to the API,
+# label/description are for the frontend picker. Keep this list in sync with
+# the AVAILABLE_MODELS array in src/components/AiChat.jsx.
+AVAILABLE_MODELS: list[dict] = [
+    {"id": DEFAULT_MODEL,                                          "label": "Nemotron 3 Nano",        "description": "Default — fast, well-rounded for KotaBot chat"},
+    {"id": "cohere/north-mini-code:free",                          "label": "North Mini Code",         "description": "Cohere — lightweight, code-leaning"},
+    {"id": "nvidia/llama-nemotron-rerank-vl-1b-v2:free",           "label": "Nemotron Rerank VL",       "description": "NVIDIA — vision-language reranking"},
+    {"id": "nvidia/nemotron-3.5-content-safety:free",              "label": "Nemotron Content Safety",  "description": "NVIDIA — safety-tuned moderation model"},
+    {"id": "poolside/laguna-m.1:free",                              "label": "Laguna M.1",               "description": "Poolside — general purpose"},
+    {"id": "liquid/lfm-2.5-1.2b-thinking:free",                     "label": "LFM 2.5 Thinking",         "description": "Liquid — small, chain-of-thought tuned"},
+    {"id": "cognitivecomputations/dolphin-mistral-24b-venice-edition:free", "label": "Dolphin Mistral 24B", "description": "Uncensored-tuned Mistral fine-tune"},
+    {"id": "qwen/qwen3-coder:free",                                 "label": "Qwen3 Coder",              "description": "Alibaba — strong at code"},
+    {"id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",    "label": "Nemotron Omni Reasoning",  "description": "NVIDIA — multimodal reasoning"},
+]
+_ALLOWED_MODEL_IDS = {m["id"] for m in AVAILABLE_MODELS}
+
+
+def _resolve_model(requested: Optional[str]) -> str:
+    """Only ever send an allow-listed model ID to OpenRouter — falls back
+    to the default for anything missing/unrecognized rather than erroring,
+    so a stale frontend build never breaks chat."""
+    if requested and requested in _ALLOWED_MODEL_IDS:
+        return requested
+    return DEFAULT_MODEL
+
 
 client: Optional[AsyncOpenAI] = None
 if KIMI_API_KEY:
@@ -50,6 +76,11 @@ if KIMI_API_KEY:
 
 MAX_HISTORY_TURNS = 100
 CANCELLABLE_STATUSES = {OrderStatus.PENDING, OrderStatus.PAID}
+
+# Payment limits — MUST mirror src/pages/Checkout.jsx (CASH_MAX / CARD_MAX).
+# If either side changes, update both so KotaBot never quotes a stale limit.
+CASH_MAX_FREE,    CASH_MAX_PROBITE    = 150, 2000
+CARD_MAX_FREE,    CARD_MAX_PROBITE    = 250, 3000
 
 # SAST timezone (UTC+2, no DST)
 SAST = timezone(timedelta(hours=2))
@@ -67,6 +98,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     messages: List[ChatMessage]
     order_id: Optional[str] = None
+    model: Optional[str] = None  # NEW — OpenRouter model id; validated server-side against AVAILABLE_MODELS
 
 
 class SuggestionRequest(BaseModel):
@@ -86,6 +118,33 @@ def _now_sast() -> datetime:
 
 def _sast_label() -> str:
     return _now_sast().strftime("%A %d %B %Y · %H:%M SAST")
+
+
+def _to_sast(dt: Optional[datetime]) -> Optional[datetime]:
+    """
+    Convert a stored timestamp to SAST for display.
+
+    Every timestamp in this codebase (Order.created_at, DeliveryAssignment.
+    accepted_at/picked_up_at, WalletTransaction.created_at, etc.) is written
+    with `datetime.utcnow()` — a NAIVE datetime holding a UTC value, with no
+    tzinfo attached. Previously some call sites did `dt.replace(tzinfo=SAST)`
+    or appended a literal "SAST" label to a bare `strftime()` — both just
+    relabel the UTC clock value as if it were already SAST, which is wrong
+    by exactly the 2-hour offset (and skews any elapsed-time math using it).
+
+    This treats the naive value as UTC (which is what it actually is) and
+    converts it properly.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(SAST)
+
+
+def _fmt_sast(dt: Optional[datetime], fmt: str = "%d %b %Y %H:%M") -> str:
+    converted = _to_sast(dt)
+    return converted.strftime(fmt) if converted else "N/A"
 
 
 def _is_ai_active(hours_status: dict) -> tuple[bool, str]:
@@ -195,14 +254,14 @@ async def _build_driver_block(user_id: str) -> str:
                 delivery_status = step_map.get(assignment.status.value, assignment.status.value)
                 mins_on_road = ""
                 if assignment.accepted_at:
-                    elapsed = int((_now_sast() - assignment.accepted_at.replace(tzinfo=SAST)).total_seconds() / 60)
+                    elapsed = int((_now_sast() - _to_sast(assignment.accepted_at)).total_seconds() / 60)
                     mins_on_road = f" ({elapsed} min on road)"
                 active_delivery_block = f"""
   ┌─ ACTIVE DELIVERY ────────────────────────────────
   │ Order       : #{str(assignment.order_id)[-8:].upper()} (ID: {assignment.order_id})
   │ Status      : {delivery_status}
-  │ Accepted at : {assignment.accepted_at.strftime('%H:%M SAST') if assignment.accepted_at else 'N/A'}{mins_on_road}
-  │ Picked up   : {assignment.picked_up_at.strftime('%H:%M SAST') if assignment.picked_up_at else 'Not yet'}
+  │ Accepted at : {_fmt_sast(assignment.accepted_at, '%H:%M SAST') if assignment.accepted_at else 'N/A'}{mins_on_road}
+  │ Picked up   : {_fmt_sast(assignment.picked_up_at, '%H:%M SAST') if assignment.picked_up_at else 'Not yet'}
   │ Customer    : {assignment.customer_name} · {assignment.customer_phone or 'no phone'}
   │ Address     : {assignment.delivery_address}
   │ Delivery fee: R{assignment.delivery_fee:.2f}
@@ -215,7 +274,7 @@ async def _build_driver_block(user_id: str) -> str:
         tx_lines = ""
         if recent_tx:
             tx_lines = "\nRecent wallet transactions:\n" + "\n".join(
-                f"  {t.created_at.strftime('%d %b %Y %H:%M')} | "
+                f"  {_fmt_sast(t.created_at)} SAST | "
                 f"{'+'if t.amount>0 else ''}R{t.amount:.2f} | "
                 f"{t.type.value:20} | Bal: R{t.balance_after:.2f} | {t.description[:40]}"
                 for t in recent_tx
@@ -261,7 +320,7 @@ def _build_account_status_block(user: User) -> str:
     if user.is_banned:
         lines.append("⛔  ACCOUNT STATUS : PERMANENTLY BANNED")
         lines.append(f"   Reason          : {user.banned_reason or 'No reason provided'}")
-        lines.append(f"   Banned at       : {user.banned_at.strftime('%d %b %Y %H:%M') if user.banned_at else 'Unknown'}")
+        lines.append(f"   Banned at       : {_fmt_sast(user.banned_at) if user.banned_at else 'Unknown'}")
         lines.append("   Appeal          : Contact futurekgomotso@gmail.com or 065 393 5339")
         lines.append("")
         lines.append("   ⚠️  KOTABOT INSTRUCTION: This account is fully banned.")
@@ -276,7 +335,7 @@ def _build_account_status_block(user: User) -> str:
         else:
             lines.append("⏸️   ACCOUNT STATUS : SUSPENDED")
             lines.append(f"   Reason          : {user.suspension_reason or 'No reason provided'}")
-            lines.append(f"   Suspended at    : {user.suspended_at.strftime('%d %b %Y %H:%M') if user.suspended_at else 'Unknown'}")
+            lines.append(f"   Suspended at    : {_fmt_sast(user.suspended_at) if user.suspended_at else 'Unknown'}")
             if user.suspended_until:
                 remaining_mins = int((user.suspended_until - now).total_seconds() / 60)
                 remaining_str = (
@@ -286,7 +345,7 @@ def _build_account_status_block(user: User) -> str:
                     if remaining_mins >= 60
                     else f"{remaining_mins}m"
                 )
-                lines.append(f"   Lifts at        : {user.suspended_until.strftime('%d %b %Y %H:%M')} ({remaining_str} remaining)")
+                lines.append(f"   Lifts at        : {_fmt_sast(user.suspended_until)} ({remaining_str} remaining)")
             else:
                 lines.append("   Duration        : Indefinite (admin must lift manually)")
             lines.append("   Appeal          : Contact futurekgomotso@gmail.com or 065 393 5339")
@@ -309,7 +368,7 @@ def _build_account_status_block(user: User) -> str:
         lines.append(f"⚠️   ACCOUNT STATUS : WARNED ({user.warning_count} warning(s))")
         if last_warning:
             lines.append(f"   Latest warning  : {last_warning.reason}")
-            lines.append(f"   Issued at       : {last_warning.issued_at.strftime('%d %b %Y %H:%M')}")
+            lines.append(f"   Issued at       : {_fmt_sast(last_warning.issued_at)}")
             lines.append(f"   Issued by       : {last_warning.issued_by_name}")
         lines.append("   Note            : Account is fully functional. 3 warnings = restricted.")
 
@@ -323,13 +382,68 @@ def _build_account_status_block(user: User) -> str:
         warning_lines = []
         for idx, w in enumerate(user.warnings, 1):
             warning_lines.append(
-                f"  {idx}. [{w.issued_at.strftime('%d %b %Y')}] {w.reason}"
+                f"  {idx}. [{_fmt_sast(w.issued_at, '%d %b %Y')}] {w.reason}"
                 + (f" — \"{w.message}\"" if w.message else "")
                 + f" (by {w.issued_by_name})"
             )
         block += "\n\nAll warnings on record:\n" + "\n".join(warning_lines)
 
     return block
+
+
+# ── NEW: Billing / ProBite block ─────────────────────────────────────────
+async def _build_billing_block(user: User) -> str:
+    """
+    Summarizes the customer's subscription plan, chat-credit balance, and
+    the payment limits that actually apply to them, so KotaBot never quotes
+    the wrong tier (previously the system prompt hard-coded the FREE-plan
+    R150/R250 limits for every customer, even ProBite subscribers who
+    actually get R2000/R3000 — see Checkout.jsx CASH_MAX/CARD_MAX).
+    """
+    is_probite = user.plan == SubscriptionPlan.PROBITE
+
+    cash_max = CASH_MAX_PROBITE if is_probite else CASH_MAX_FREE
+    card_max = CARD_MAX_PROBITE if is_probite else CARD_MAX_FREE
+
+    credit_status = await credits_service.get_status(user)
+    if credit_status.get("unlimited"):
+        credits_line = "Chat credits : UNLIMITED (ProBite perk — never blocked)"
+    else:
+        resets_at = credit_status.get("resets_at")
+        resets_label = "soon" if not resets_at else _fmt_sast(
+            datetime.fromisoformat(resets_at.replace("Z", "+00:00"))
+        )
+        credits_line = (
+            f"Chat credits : {credit_status.get('credits')}/{credit_status.get('credits_cap')} "
+            f"— refills to full at {resets_label} SAST"
+        )
+
+    if not is_probite:
+        return f"""Plan         : FREE
+{credits_line}
+Payment limits (THIS customer) : Cash R{cash_max} · Card/Paystack R{card_max}
+Upsell note  : ProBite unlocks unlimited KotaBot chat, file/image uploads in
+               chat, longer voice notes (60s vs 5s), and raised payment
+               limits (Cash R{CASH_MAX_PROBITE}, Card R{CARD_MAX_PROBITE}). Mention it ONLY if
+               the customer hits a limit, asks about upgrading, or the
+               conversation naturally invites it — never a hard sell."""
+
+    status_val = user.subscription_status.value if hasattr(user.subscription_status, "value") else str(user.subscription_status)
+    cycle_val = user.billing_cycle.value if user.billing_cycle and hasattr(user.billing_cycle, "value") else (user.billing_cycle or "N/A")
+    expires_label = _fmt_sast(user.subscription_expires_at) if user.subscription_expires_at else "N/A"
+    renewal_note = (
+        "Cancelled — stays ProBite until expiry above, then auto-downgrades to FREE"
+        if user.subscription_cancel_at_period_end
+        else f"Auto-renews on the {cycle_val} cycle"
+    )
+
+    return f"""Plan         : ProBite 🔥 (paid subscriber)
+Status       : {status_val.upper()}
+Billing cycle: {cycle_val}
+{'Expires' if user.subscription_cancel_at_period_end else 'Renews'} at   : {expires_label} SAST
+Renewal      : {renewal_note}
+{credits_line}
+Payment limits (THIS customer) : Cash R{cash_max} · Card/Paystack R{card_max}  (ProBite tier — do NOT quote the FREE-plan R{CASH_MAX_FREE}/R{CARD_MAX_FREE} limits to this customer)"""
 
 
 # ── NEW: Notifications block ───────────────────────────────────────────────
@@ -375,7 +489,7 @@ async def _build_notifications_block(user_id: str) -> str:
                 f"expires in {days_left}d\n"
                 f"     Title  : {n.title}\n"
                 f"     Message: {n.message}\n"
-                f"     From   : {n.created_by_name}  |  Sent: {n.created_at.strftime('%d %b %Y %H:%M')}"
+                f"     From   : {n.created_by_name}  |  Sent: {_fmt_sast(n.created_at)}"
             )
 
         unread_count = len(unread_ids)
@@ -484,7 +598,7 @@ Items       : {items_str or 'none'}
 Payment     : {order.payment_method or 'paystack'}
 Address     : {order.delivery_address or 'Not specified'}
 Phone       : {order.phone or 'Not provided'}
-Placed at   : {order.created_at.strftime('%d %b %Y %H:%M SAST')}
+Placed at   : {_fmt_sast(order.created_at)} SAST
 Cancellable : {'YES (still ' + status_val + ')' if can_cancel else 'NO (already ' + status_val + ')'}
 {driver_info_line}
 """
@@ -512,7 +626,7 @@ Cancellable : {'YES (still ' + status_val + ')' if can_cancel else 'NO (already 
                     f"  #{str(o.id)[-8:].upper()} (ID:{str(o.id)}) | "
                     f"{status:10} | R{o.total_amount:>7.2f}{disc_str} | "
                     f"{o.payment_method or 'paystack':8} | "
-                    f"{o.created_at.strftime('%d %b %Y %H:%M')} | "
+                    f"{_fmt_sast(o.created_at)} | "
                     f"{items_str} | {'can cancel' if can_cancel else 'locked'}"
                 )
             history_block = (
@@ -533,6 +647,9 @@ Cancellable : {'YES (still ' + status_val + ')' if can_cancel else 'NO (already 
 
     # ── Account status block (NEW) ────────────────────────────────────────
     account_status_block = _build_account_status_block(user)
+
+    # ── Billing / ProBite block (NEW) ───────────────────────────────────────
+    billing_block = await _build_billing_block(user)
 
     # ── Notifications block (NEW) ─────────────────────────────────────────
     notifications_block = await _build_notifications_block(str(user.id))
@@ -612,10 +729,17 @@ Delivery fee tiers (dynamic, based on subtotal before discount):
   R50 – R100  →  R12 delivery fee
   R100+       →  R15 delivery fee
 
-Payment limits:
-  Cash on Delivery  : maximum order total R150
-  Paystack (online) : maximum order total R250
-  (for larger orders call Kgomotso at 065 393 5339)
+Payment limits (FREE plan):
+  Cash on Delivery  : maximum order total R{CASH_MAX_FREE}
+  Paystack (online) : maximum order total R{CARD_MAX_FREE}
+
+Payment limits (ProBite 🔥):
+  Cash on Delivery  : maximum order total R{CASH_MAX_PROBITE}
+  Paystack (online) : maximum order total R{CARD_MAX_PROBITE}
+
+  ⚠️ ALWAYS use the limits from "CURRENT CUSTOMER → BILLING & SUBSCRIPTION"
+  below for THIS customer — don't default to the FREE numbers.
+  (for orders over the limit call Kgomotso at 065 393 5339)
 
 Cancellation policy:
   - 5 FREE cancellations per calendar month
@@ -757,6 +881,11 @@ Admin      : {'✅ YES — has admin panel access' if is_admin else 'No'}
 {history_block}
 
 ════════════════════════════════════════════════════════════════════════
+                BILLING & SUBSCRIPTION (THIS CUSTOMER)
+════════════════════════════════════════════════════════════════════════
+{billing_block}
+
+════════════════════════════════════════════════════════════════════════
                      ACCOUNT MODERATION STATUS
 ════════════════════════════════════════════════════════════════════════
 {account_status_block}
@@ -793,6 +922,17 @@ Time awareness:
   - Answer "what time is it?" with the exact time from above
   - Calculate time differences precisely ("that order was placed 2 hrs ago")
   - Always clarify times are SAST (UTC+2, no daylight saving)
+
+Billing & ProBite awareness:
+  - ALWAYS use "BILLING & SUBSCRIPTION (THIS CUSTOMER)" above for this
+    customer's actual plan, credits, and payment limits — never assume FREE
+  - If a FREE customer's order would exceed their Cash/Card limit, tell them
+    the exact ProBite limit that would cover it, not just "upgrade"
+  - If a FREE customer is low on/out of chat credits, tell them when credits
+    refill (shown above) and mention ProBite = unlimited, once, briefly
+  - Never guess subscription status/expiry — only state what's shown above
+  - Don't upsell ProBite unprompted in every message — only when relevant
+    (they hit a limit, ask about it, or ask "what's ProBite?")
 
 Helpful links to share when relevant:
   Menu            : https://foodsorder.vercel.app/menu
@@ -923,7 +1063,7 @@ async def _maybe_save_suggestion(messages: List[ChatMessage], user: User) -> Non
     if client:
         try:
             resp = await client.chat.completions.create(
-                model=MODEL,
+                model=DEFAULT_MODEL,
                 messages=[{
                     "role": "user",
                     "content": (
@@ -999,9 +1139,11 @@ async def ai_chat(
     # credit — only an actual model call does.
     await credits_service.require_credits(current_user)
 
+    resolved_model = _resolve_model(req.model)
+
     try:
         response = await client.chat.completions.create(
-            model=MODEL,
+            model=resolved_model,
             messages=[{"role": "system", "content": system_prompt}] + chat_messages,
             temperature=0.7,
             max_tokens=4096,
@@ -1026,7 +1168,7 @@ async def ai_chat(
         completion_tokens = getattr(usage, "completion_tokens", None) if usage else None
         credits_charged = await credits_service.charge_for_tokens(current_user, completion_tokens)
 
-        payload: dict = {"reply": reply}
+        payload: dict = {"reply": reply, "model": resolved_model}
         if cancel_result is not None:
             payload["cancel_result"] = cancel_result
         payload["credits"] = {
@@ -1061,12 +1203,15 @@ async def ai_chat_stream(
     # so a blocked user never opens a connection that goes nowhere.
     await credits_service.require_credits(current_user)
 
+    resolved_model = _resolve_model(req.model)
+
     async def event_generator() -> AsyncGenerator[str, None]:
         completion_tokens: Optional[int] = None
         reply_chars = 0
         try:
+            yield f"data: {json.dumps({'model': resolved_model})}\n\n"
             stream = await client.chat.completions.create(
-                model=MODEL,
+                model=resolved_model,
                 messages=[{"role": "system", "content": system_prompt}] + chat_messages,
                 temperature=0.7, max_tokens=4096,
                 extra_body={
@@ -1253,6 +1398,12 @@ async def get_suggestions(admin_user: User = Depends(get_current_admin_user)):
         raise HTTPException(500, "Could not load suggestions")
 
 
+@router.get("/models")
+async def list_models(current_user: User = Depends(get_current_user)):
+    """Selectable OpenRouter models for the chat model picker (all free-tier)."""
+    return {"models": AVAILABLE_MODELS, "default": DEFAULT_MODEL}
+
+
 @router.get("/time")
 async def get_current_time():
     """Public endpoint — returns current SAST time and delivery status."""
@@ -1275,7 +1426,7 @@ async def test_ai():
         return {"error": "No client — missing KIMI_API_KEY"}
     try:
         resp = await client.chat.completions.create(
-            model=MODEL,
+            model=DEFAULT_MODEL,
             messages=[{"role": "user", "content": "Say yebo and tell me the current time"}],
             max_tokens=200,
             extra_body={"thinking": {"type": "disabled"}},
@@ -1291,7 +1442,7 @@ async def debug_openrouter():
         return {"status": "error", "detail": "No client — KIMI_API_KEY missing or empty"}
     try:
         resp = await client.chat.completions.create(
-            model=MODEL,
+            model=DEFAULT_MODEL,
             messages=[{"role": "user", "content": "Just say 'API works'"}],
             max_tokens=200, temperature=0.0,
             extra_body={"thinking": {"type": "disabled"}},
