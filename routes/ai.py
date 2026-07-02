@@ -38,29 +38,39 @@ KIMI_API_KEY = os.getenv("KIMI_API_KEY")
 DEFAULT_MODEL = "nvidia/nemotron-3-nano-30b-a3b:free"
 
 # Selectable models — all OpenRouter free-tier. id is what's sent to the API,
-# label/description are for the frontend picker. Keep this list in sync with
-# the AVAILABLE_MODELS array in src/components/AiChat.jsx.
+# label/description are for the frontend picker. `probite_only` gates a model
+# behind an active ProBite subscription (matches file-upload/voice-length
+# gating elsewhere). Keep this list in sync with AVAILABLE_MODELS in
+# src/components/AiChat.jsx.
 AVAILABLE_MODELS: list[dict] = [
-    {"id": DEFAULT_MODEL,                                          "label": "Nemotron 3 Nano",        "description": "Default — fast, well-rounded for KotaBot chat"},
-    {"id": "cohere/north-mini-code:free",                          "label": "North Mini Code",         "description": "Cohere — lightweight, code-leaning"},
-    {"id": "nvidia/llama-nemotron-rerank-vl-1b-v2:free",           "label": "Nemotron Rerank VL",       "description": "NVIDIA — vision-language reranking"},
-    {"id": "nvidia/nemotron-3.5-content-safety:free",              "label": "Nemotron Content Safety",  "description": "NVIDIA — safety-tuned moderation model"},
-    {"id": "poolside/laguna-m.1:free",                              "label": "Laguna M.1",               "description": "Poolside — general purpose"},
-    {"id": "liquid/lfm-2.5-1.2b-thinking:free",                     "label": "LFM 2.5 Thinking",         "description": "Liquid — small, chain-of-thought tuned"},
-    {"id": "cognitivecomputations/dolphin-mistral-24b-venice-edition:free", "label": "Dolphin Mistral 24B", "description": "Uncensored-tuned Mistral fine-tune"},
-    {"id": "qwen/qwen3-coder:free",                                 "label": "Qwen3 Coder",              "description": "Alibaba — strong at code"},
-    {"id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",    "label": "Nemotron Omni Reasoning",  "description": "NVIDIA — multimodal reasoning"},
+    {"id": DEFAULT_MODEL,                                                   "label": "Nemotron 3 Nano",       "description": "Default — fast, well-rounded for KotaBot chat", "probite_only": False},
+    {"id": "cohere/north-mini-code:free",                                   "label": "North Mini Code",        "description": "Cohere — lightweight, code-leaning",            "probite_only": True},
+    {"id": "nvidia/llama-nemotron-rerank-vl-1b-v2:free",                    "label": "Nemotron Rerank VL",     "description": "NVIDIA — vision-language reranking",            "probite_only": False},
+    {"id": "nvidia/nemotron-3.5-content-safety:free",                       "label": "Nemotron Content Safety","description": "NVIDIA — safety-tuned moderation model",         "probite_only": True},
+    {"id": "poolside/laguna-m.1:free",                                      "label": "Laguna M.1",             "description": "Poolside — general purpose",                     "probite_only": False},
+    {"id": "liquid/lfm-2.5-1.2b-thinking:free",                             "label": "LFM 2.5 Thinking",       "description": "Liquid — small, chain-of-thought tuned",         "probite_only": True},
+    {"id": "cognitivecomputations/dolphin-mistral-24b-venice-edition:free", "label": "Dolphin Mistral 24B",    "description": "Uncensored-tuned Mistral fine-tune",             "probite_only": True},
+    {"id": "qwen/qwen3-coder:free",                                         "label": "Qwen3 Coder",            "description": "Alibaba — strong at code",                       "probite_only": True},
+    {"id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",            "label": "Nemotron Omni Reasoning","description": "NVIDIA — multimodal reasoning",                  "probite_only": True},
 ]
 _ALLOWED_MODEL_IDS = {m["id"] for m in AVAILABLE_MODELS}
+_PROBITE_ONLY_MODEL_IDS = {m["id"] for m in AVAILABLE_MODELS if m["probite_only"]}
 
 
-def _resolve_model(requested: Optional[str]) -> str:
+def _resolve_model(requested: Optional[str], user: Optional["User"] = None) -> str:
     """Only ever send an allow-listed model ID to OpenRouter — falls back
     to the default for anything missing/unrecognized rather than erroring,
-    so a stale frontend build never breaks chat."""
-    if requested and requested in _ALLOWED_MODEL_IDS:
-        return requested
-    return DEFAULT_MODEL
+    so a stale frontend build never breaks chat. Also silently downgrades
+    a ProBite-only model to the default if the requesting user isn't on
+    ProBite — mirrors the frontend's disabled state, but enforced
+    server-side so the gate can't be bypassed by calling the API directly."""
+    if not requested or requested not in _ALLOWED_MODEL_IDS:
+        return DEFAULT_MODEL
+    if requested in _PROBITE_ONLY_MODEL_IDS:
+        is_probite = bool(user) and user.plan == SubscriptionPlan.PROBITE
+        if not is_probite:
+            return DEFAULT_MODEL
+    return requested
 
 
 client: Optional[AsyncOpenAI] = None
@@ -1139,7 +1149,7 @@ async def ai_chat(
     # credit — only an actual model call does.
     await credits_service.require_credits(current_user)
 
-    resolved_model = _resolve_model(req.model)
+    resolved_model = _resolve_model(req.model, current_user)
 
     try:
         response = await client.chat.completions.create(
@@ -1203,7 +1213,7 @@ async def ai_chat_stream(
     # so a blocked user never opens a connection that goes nowhere.
     await credits_service.require_credits(current_user)
 
-    resolved_model = _resolve_model(req.model)
+    resolved_model = _resolve_model(req.model, current_user)
 
     async def event_generator() -> AsyncGenerator[str, None]:
         completion_tokens: Optional[int] = None
@@ -1400,8 +1410,16 @@ async def get_suggestions(admin_user: User = Depends(get_current_admin_user)):
 
 @router.get("/models")
 async def list_models(current_user: User = Depends(get_current_user)):
-    """Selectable OpenRouter models for the chat model picker (all free-tier)."""
-    return {"models": AVAILABLE_MODELS, "default": DEFAULT_MODEL}
+    """Selectable OpenRouter models for the chat model picker (all free-tier).
+    Each model includes `available` — whether THIS user's plan can use it —
+    so the frontend can grey out ProBite-only models without re-deriving
+    the plan check itself."""
+    is_probite = current_user.plan == SubscriptionPlan.PROBITE
+    models = [
+        {**m, "available": is_probite or not m["probite_only"]}
+        for m in AVAILABLE_MODELS
+    ]
+    return {"models": models, "default": DEFAULT_MODEL, "is_probite": is_probite}
 
 
 @router.get("/time")
