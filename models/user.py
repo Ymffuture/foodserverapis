@@ -22,11 +22,21 @@ class UserWarning(BaseModel):
     issued_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class SocialLinks(BaseModel):
+    """User-facing social profile links, shown on the Profile page."""
+    facebook:  Optional[str] = None
+    github:    Optional[str] = None
+    x:         Optional[str] = None   # formerly Twitter
+    instagram: Optional[str] = None
+
+
 class User(Document):
     email: EmailStr
     hashed_password: Optional[str] = None   # None = OAuth-only account
     full_name: str
     phone: Optional[str] = None
+    address: Optional[str] = None                       # ← NEW (profile page)
+    social_links: SocialLinks = Field(default_factory=SocialLinks)  # ← NEW (profile page)
     # Google OAuth
     google_id:  Optional[str] = None
     picture:    Optional[str] = None
