@@ -37,6 +37,12 @@ class User(Document):
     phone: Optional[str] = None
     address: Optional[str] = None                       # ← NEW (profile page)
     social_links: SocialLinks = Field(default_factory=SocialLinks)  # ← NEW (profile page)
+
+    # ── Referral program (retention) ────────────────────────────────────
+    referral_code: Optional[str] = None          # this user's own shareable code
+    referred_by: Optional[str] = None            # referrer's user_id, set at signup
+    referral_bonus_points: int = 0               # KotaPoints earned via referrals (folded into wallet earned_points)
+    referral_reward_granted: bool = False        # true once this user's first delivered order paid out the bonus
     # Google OAuth
     google_id:  Optional[str] = None
     picture:    Optional[str] = None
