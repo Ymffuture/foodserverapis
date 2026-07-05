@@ -102,13 +102,19 @@ async def _unique_code() -> str:
 
 
 async def _earned_points(user_id: str) -> tuple[int, list[Order]]:
-    """Return (earned_kp, delivered_orders) for a user."""
+    """Return (earned_kp, delivered_orders) for a user — spend-based KotaPoints
+    plus any referral bonus points (see services/referral_service.py)."""
     delivered = await Order.find({
         "user_id": user_id,
         "status": OrderStatus.DELIVERED.value,
     }).to_list()
     total_spend = sum(o.total_amount or 0 for o in delivered)
-    return round(total_spend * 0.1), delivered
+    spend_points = round(total_spend * 0.1)
+
+    user = await User.get(user_id)
+    referral_points = user.referral_bonus_points if user else 0
+
+    return spend_points + referral_points, delivered
 
 
 async def _redeemed_points(user_id: str) -> int:

@@ -1,15 +1,36 @@
 # routes/orders.py
-from fastapi import APIRouter, Depends, HTTPException
+import asyncio
+import json
+from datetime import datetime
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from jose import jwt, JWTError
 from pydantic import BaseModel
 from models.order import Order
+from models.delivery_assignment import DeliveryAssignment
 from schemas.order_schema import OrderCreate, OrderResponse
 from services.order_service import create_order
 from dependencies import get_current_user, get_current_admin_user
 from models.user import User
 from utils.enums import OrderStatus as OrderStatusEnum
+from config import SECRET_KEY, ALGORITHM
 from typing import List
 
 router = APIRouter()
+
+
+async def _user_from_token(token: str) -> User | None:
+    """Decode a JWT the same way get_current_user does, but callable from a
+    query-param token — needed because the browser's native EventSource API
+    can't set an Authorization header."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        if not email:
+            return None
+    except JWTError:
+        return None
+    return await User.find_one(User.email == email)
 
 
 def _serialize(order: Order) -> dict:
@@ -97,6 +118,11 @@ async def update_order_status(
 
     order.status = new_status
     await order.save()
+
+    if new_status == OrderStatusEnum.DELIVERED:
+        from services.referral_service import apply_referral_reward_if_eligible
+        await apply_referral_reward_if_eligible(order)
+
     return _serialize(order)
 
 
@@ -125,6 +151,90 @@ async def search_order_by_short_id(
             return _serialize(o)
 
     raise HTTPException(status_code=404, detail="Order not found")
+
+
+# ── Real-time order tracking (SSE) ───────────────────────────────────────────
+# Placed before the generic /{order_id} GET so "stream" isn't swallowed as an
+# order_id path segment (same reasoning as /search and /all above).
+
+@router.get("/{order_id}/stream")
+async def stream_order_status(order_id: str, token: str = Query(...)):
+    """
+    Server-Sent Events stream for live order status. Pushes an update the
+    instant the order or its delivery assignment changes, instead of the
+    frontend polling GET /orders/{id} every few seconds.
+
+    EventSource (the browser API for consuming SSE) cannot set an
+    Authorization header, so the JWT is passed as a query param here and
+    validated the same way get_current_user does.
+    """
+    user = await _user_from_token(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired token.")
+
+    order = await Order.get(order_id)
+    if not order or order.user_id != str(user.id):
+        raise HTTPException(status_code=404, detail="Order not found.")
+
+    async def event_generator():
+        last_snapshot = None
+        idle_ticks = 0
+        try:
+            while True:
+                current = await Order.get(order_id)
+                if not current:
+                    yield f"event: error\ndata: {json.dumps({'detail': 'Order no longer exists.'})}\n\n"
+                    break
+
+                assignment = await DeliveryAssignment.find_one(DeliveryAssignment.order_id == order_id)
+                status_val = current.status.value if hasattr(current.status, "value") else str(current.status)
+
+                snapshot = (
+                    status_val,
+                    assignment.status.value if assignment else None,
+                    assignment.driver_id if assignment else None,
+                )
+
+                if snapshot != last_snapshot:
+                    payload = {
+                        "id": str(current.id),
+                        "status": status_val,
+                        "total_amount": current.total_amount,
+                        "updated_at": datetime.utcnow().isoformat(),
+                        "assignment": None if not assignment else {
+                            "status": assignment.status.value if hasattr(assignment.status, "value") else str(assignment.status),
+                            "driver_name": assignment.driver_name,
+                            "driver_phone": assignment.driver_phone,
+                            "accepted_at": assignment.accepted_at.isoformat() if assignment.accepted_at else None,
+                            "picked_up_at": assignment.picked_up_at.isoformat() if assignment.picked_up_at else None,
+                            "estimated_time": assignment.estimated_time,
+                        },
+                    }
+                    yield f"event: update\ndata: {json.dumps(payload)}\n\n"
+                    last_snapshot = snapshot
+                    idle_ticks = 0
+                else:
+                    idle_ticks += 1
+                    if idle_ticks % 10 == 0:  # ~30s heartbeat to keep proxies from closing an idle connection
+                        yield ": heartbeat\n\n"
+
+                if status_val in ("delivered", "cancelled", "refunded"):
+                    yield f"event: done\ndata: {json.dumps({'status': status_val})}\n\n"
+                    break
+
+                await asyncio.sleep(3)
+        except asyncio.CancelledError:
+            pass  # client disconnected — nothing to clean up, no background task was spawned
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # disable nginx buffering so events flush immediately
+        },
+    )
 
 
 # ── Single order (customer) — keep LAST so named routes are not shadowed ────

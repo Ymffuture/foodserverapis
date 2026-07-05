@@ -722,6 +722,9 @@ async def update_delivery_status(body: UpdateDeliveryStatus, current_user: User 
             order.status = OrderStatus.DELIVERED
             await order.save()
 
+            from services.referral_service import apply_referral_reward_if_eligible
+            await apply_referral_reward_if_eligible(order)
+
         await create_wallet_transaction(
             driver=driver, transaction_type=TransactionType.DELIVERY_PAYMENT,
             amount=assignment.delivery_fee,

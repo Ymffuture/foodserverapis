@@ -38,6 +38,7 @@ class UserCreate(BaseModel):
     password: str
     full_name: str
     phone: str
+    referral_code: Optional[str] = None  # ← NEW — code of whoever referred this signup
 
 class Token(BaseModel):
     access_token: str
@@ -106,20 +107,26 @@ async def register(user: UserCreate):
 
     token = secrets.token_urlsafe(32)
 
-    await User(
+    from services.referral_service import generate_referral_code, apply_referral_code_at_signup
+
+    new_user = User(
         email=user.email,
         hashed_password=get_password_hash(user.password),
         full_name=user.full_name,
         phone=user.phone,
         email_verified=False,
         verification_token=token,
-    ).insert()
+        referral_code=await generate_referral_code(user.full_name),
+    )
+    referred = await apply_referral_code_at_signup(new_user, user.referral_code)
+    await new_user.insert()
 
     return {
         "msg":       "User created successfully",
         "token":     token,
         "email":     user.email,
         "full_name": user.full_name,
+        "referred":  referred,
     }
 
 
