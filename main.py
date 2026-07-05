@@ -10,6 +10,7 @@ from routes.notifications import router as notifications_router
 from routes.Users         import router as users_router
 from routes.appeals       import router as appeals_router              # ← NEW
 from routes.billing       import router as billing_router              # ← NEW (ProBite)
+from routes.referrals     import router as referrals_router            # ← NEW (referral program)
 # main.py
 from routes.social import router as social_router
 
@@ -51,6 +52,7 @@ app.include_router(users_router,                                 tags=["Users"])
 app.include_router(appeals_router,                               tags=["Appeals"])  # ← NEW
 app.include_router(social_router, tags=["Social"])
 app.include_router(billing_router, tags=["Billing"])  # ← NEW (ProBite)
+app.include_router(referrals_router, tags=["Referrals"])  # ← NEW (referral program)
 
 @app.get("/")
 def home():
