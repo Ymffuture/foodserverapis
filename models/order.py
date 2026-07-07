@@ -26,6 +26,7 @@ class Order(Document):
     # Discount applied at checkout (from reward code).
     # Stored so OrderStatus page and KotaBot can reference the actual discount.
     discount: Optional[float] = Field(default=0.0, ge=0)
+    scheduled_for: Optional[datetime] = None  # ← NEW — customer requested a future delivery time
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     class Settings:
