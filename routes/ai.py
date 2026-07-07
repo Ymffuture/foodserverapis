@@ -35,7 +35,18 @@ logger.setLevel(logging.INFO)
 
 # ── OpenRouter Setup ───────────────────────────────────────────────────────
 KIMI_API_KEY = os.getenv("KIMI_API_KEY")
-DEFAULT_MODEL = "nvidia/nemotron-3-nano-30b-a3b:free"
+
+# Named model ids — referenced individually below so task routing reads
+# clearly instead of a wall of string literals.
+LFM_THINKING_MODEL  = "liquid/lfm-2.5-1.2b-thinking:free"
+RERANK_VL_MODEL     = "nvidia/llama-nemotron-rerank-vl-1b-v2:free"
+NEMOTRON_NANO_MODEL = "nvidia/nemotron-3-nano-30b-a3b:free"
+
+# Free-plan default — used whenever no model was explicitly picked and no
+# task-specific mapping below applies. LFM 2.5 Thinking is small and
+# chain-of-thought tuned, which makes it a good general-purpose default for
+# free-plan KotaBot chat without needing a ProBite subscription.
+DEFAULT_MODEL = LFM_THINKING_MODEL
 
 # Selectable models — all OpenRouter free-tier. id is what's sent to the API,
 # label/description are for the frontend picker. `probite_only` gates a model
@@ -43,18 +54,34 @@ DEFAULT_MODEL = "nvidia/nemotron-3-nano-30b-a3b:free"
 # gating elsewhere). Keep this list in sync with AVAILABLE_MODELS in
 # src/components/AiChat.jsx.
 AVAILABLE_MODELS: list[dict] = [
-    {"id": DEFAULT_MODEL,                                                   "label": "Nemotron 3 Nano",       "description": "Default — fast, well-rounded for KotaBot chat", "probite_only": False},
+    {"id": LFM_THINKING_MODEL,                                              "label": "LFM 2.5 Thinking",       "description": "Default — chain-of-thought tuned, free plan",   "probite_only": False},
+    {"id": RERANK_VL_MODEL,                                                 "label": "Nemotron Rerank VL",     "description": "NVIDIA — vision-language reranking, free plan","probite_only": False},
+    {"id": NEMOTRON_NANO_MODEL,                                             "label": "Nemotron 3 Nano",        "description": "Fast, well-rounded for KotaBot chat",           "probite_only": False},
     {"id": "cohere/north-mini-code:free",                                   "label": "North Mini Code",        "description": "Cohere — lightweight, code-leaning",            "probite_only": True},
-    {"id": "nvidia/llama-nemotron-rerank-vl-1b-v2:free",                    "label": "Nemotron Rerank VL",     "description": "NVIDIA — vision-language reranking",            "probite_only": False},
-    {"id": "nvidia/nemotron-3.5-content-safety:free",                       "label": "Nemotron Content Safety","description": "NVIDIA — safety-tuned moderation model",         "probite_only": True},
-    {"id": "poolside/laguna-m.1:free",                                      "label": "Laguna M.1",             "description": "Poolside — general purpose",                     "probite_only": False},
-    {"id": "liquid/lfm-2.5-1.2b-thinking:free",                             "label": "LFM 2.5 Thinking",       "description": "Liquid — small, chain-of-thought tuned",         "probite_only": True},
-    {"id": "cognitivecomputations/dolphin-mistral-24b-venice-edition:free", "label": "Dolphin Mistral 24B",    "description": "Uncensored-tuned Mistral fine-tune",             "probite_only": True},
-    {"id": "qwen/qwen3-coder:free",                                         "label": "Qwen3 Coder",            "description": "Alibaba — strong at code",                       "probite_only": True},
-    {"id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",            "label": "Nemotron Omni Reasoning","description": "NVIDIA — multimodal reasoning",                  "probite_only": True},
+    {"id": "nvidia/nemotron-3.5-content-safety:free",                       "label": "Nemotron Content Safety","description": "NVIDIA — safety-tuned moderation model",        "probite_only": True},
+    {"id": "poolside/laguna-m.1:free",                                      "label": "Laguna M.1",             "description": "Poolside — general purpose",                    "probite_only": False},
+    {"id": "cognitivecomputations/dolphin-mistral-24b-venice-edition:free", "label": "Dolphin Mistral 24B",    "description": "Uncensored-tuned Mistral fine-tune",            "probite_only": True},
+    {"id": "qwen/qwen3-coder:free",                                         "label": "Qwen3 Coder",            "description": "Alibaba — strong at code",                      "probite_only": True},
+    {"id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",            "label": "Nemotron Omni Reasoning","description": "NVIDIA — multimodal reasoning",                 "probite_only": True},
 ]
 _ALLOWED_MODEL_IDS = {m["id"] for m in AVAILABLE_MODELS}
 _PROBITE_ONLY_MODEL_IDS = {m["id"] for m in AVAILABLE_MODELS if m["probite_only"]}
+
+# Per-task default model — used when the frontend/caller didn't explicitly
+# request a model. Lets each internal AI task reach for whichever free-tier
+# model actually suits it, instead of every call sharing one blanket default:
+#   - "chat"           → conversational KotaBot chat (general Q&A, ordering help)
+#   - "recommendation" → picking/ranking best-fit menu items from a candidate
+#                        list — literally what a reranking model is built for
+#   - "classification" → cheap feedback tagging (thinking is disabled at the
+#                        call site anyway, so the small model is plenty)
+# All of these are free-tier (probite_only: False), so free-plan users get
+# task-appropriate routing too, not just ProBite.
+TASK_MODEL_MAP: dict[str, str] = {
+    "chat":           LFM_THINKING_MODEL,
+    "recommendation": RERANK_VL_MODEL,
+    "classification": LFM_THINKING_MODEL,
+}
 
 
 def _resolve_model(requested: Optional[str], user: Optional["User"] = None) -> str:
@@ -71,6 +98,35 @@ def _resolve_model(requested: Optional[str], user: Optional["User"] = None) -> s
         if not is_probite:
             return DEFAULT_MODEL
     return requested
+
+
+def _select_task_model(task: str, requested: Optional[str] = None, user: Optional["User"] = None) -> str:
+    """Resolve the model to use for a given internal AI task.
+
+    An explicit user-picked model (from the frontend model picker) always
+    wins — it's still routed through `_resolve_model` so the allow-list and
+    ProBite gate apply exactly as before. When nothing was explicitly
+    requested, look up a task-appropriate default from TASK_MODEL_MAP
+    instead of always falling back to one blanket DEFAULT_MODEL — e.g.
+    menu recommendations get the reranking model, chat gets the
+    thinking-tuned model.
+
+    The ProBite gate still applies to whatever task default is picked, so
+    if a task is ever mapped to a ProBite-only model, a free-plan user
+    silently gets DEFAULT_MODEL instead — same fail-safe behavior as
+    `_resolve_model`.
+    """
+    if requested:
+        return _resolve_model(requested, user)
+
+    candidate = TASK_MODEL_MAP.get(task, DEFAULT_MODEL)
+    if candidate not in _ALLOWED_MODEL_IDS:
+        return DEFAULT_MODEL
+    if candidate in _PROBITE_ONLY_MODEL_IDS:
+        is_probite = bool(user) and user.plan == SubscriptionPlan.PROBITE
+        if not is_probite:
+            return DEFAULT_MODEL
+    return candidate
 
 
 client: Optional[AsyncOpenAI] = None
@@ -1085,7 +1141,7 @@ async def _maybe_save_suggestion(messages: List[ChatMessage], user: User) -> Non
     if client:
         try:
             resp = await client.chat.completions.create(
-                model=DEFAULT_MODEL,
+                model=_select_task_model("classification", None, user),
                 messages=[{
                     "role": "user",
                     "content": (
@@ -1161,7 +1217,7 @@ async def ai_chat(
     # credit — only an actual model call does.
     await credits_service.require_credits(current_user)
 
-    resolved_model = _resolve_model(req.model, current_user)
+    resolved_model = _select_task_model("chat", req.model, current_user)
 
     try:
         response = await client.chat.completions.create(
@@ -1225,7 +1281,7 @@ async def ai_chat_stream(
     # so a blocked user never opens a connection that goes nowhere.
     await credits_service.require_credits(current_user)
 
-    resolved_model = _resolve_model(req.model, current_user)
+    resolved_model = _select_task_model("chat", req.model, current_user)
 
     async def event_generator() -> AsyncGenerator[str, None]:
         completion_tokens: Optional[int] = None
@@ -1490,7 +1546,7 @@ with ONLY valid JSON, no markdown fences, no preamble:
 {{"message": "one short, friendly sentence like 'You order X a lot — try Y, it's in the same lane'", "item_ids": ["<id1>", "<id2>"]}}"""
 
     try:
-        resolved_model = _resolve_model(None, current_user)  # use the default free model — recommendations aren't a model-picker feature
+        resolved_model = _select_task_model("recommendation", None, current_user)  # reranking model — not a model-picker feature
         response = await client.chat.completions.create(
             model=resolved_model,
             messages=[{"role": "user", "content": prompt}],
