@@ -1059,6 +1059,17 @@ async def _execute_cancel(order_id: str, user: User) -> dict:
     if order.status not in CANCELLABLE_STATUSES:
         status_val = order.status.value if hasattr(order.status, "value") else str(order.status)
         return {"success": False, "reason": f"Cannot cancel — order is already '{status_val}'"}
+
+    # Scheduled orders: ProBite can cancel immediately, ahead of the
+    # scheduled time. Free plan has to wait until it activates to PENDING
+    # (i.e. the scheduled time has arrived) before they can cancel it.
+    if order.status == OrderStatus.SCHEDULED and user.plan != SubscriptionPlan.PROBITE:
+        return {
+            "success": False,
+            "reason": "Free plan can only cancel a scheduled order once it's being prepared "
+                      "(after its scheduled time). ProBite lets you cancel a scheduled order immediately.",
+        }
+
     order.status = OrderStatus.CANCELLED
     await order.save()
     logger.info(f"Order {order_id} cancelled by {user.email}")
