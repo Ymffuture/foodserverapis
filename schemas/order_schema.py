@@ -1,7 +1,7 @@
 # schemas/order_schema.py
-from pydantic import BaseModel, field_serializer
+from pydantic import BaseModel, field_serializer, field_validator
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 
 class OrderItemInput(BaseModel):
@@ -19,6 +19,20 @@ class OrderCreate(BaseModel):
     # Backend uses this to verify total_amount and stores it on the order
     # so it can be shown on the order status/tracking page.
     discount: Optional[float] = 0.0
+    scheduled_for: Optional[datetime] = None  # ← NEW — "order for 6pm"
+
+    @field_validator("scheduled_for")
+    @classmethod
+    def _validate_scheduled_for(cls, v):
+        if v is None:
+            return v
+        now = datetime.now(timezone.utc)
+        target = v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+        if target <= now + timedelta(minutes=20):
+            raise ValueError("Scheduled time must be at least 20 minutes from now.")
+        if target > now + timedelta(days=7):
+            raise ValueError("Orders can only be scheduled up to 7 days ahead.")
+        return v
 
 
 class OrderItemResponse(BaseModel):
@@ -40,6 +54,7 @@ class OrderResponse(BaseModel):
     phone: Optional[str] = None
     delivery_fee: Optional[float] = None
     discount: Optional[float] = None        # ← reward discount stored on order
+    scheduled_for: Optional[datetime] = None  # ← NEW
     items: List[OrderItemResponse] = []
     model_config = {"from_attributes": True}
 
