@@ -85,7 +85,7 @@ if KIMI_API_KEY:
     )
 
 MAX_HISTORY_TURNS = 100
-CANCELLABLE_STATUSES = {OrderStatus.PENDING, OrderStatus.PAID}
+CANCELLABLE_STATUSES = {OrderStatus.SCHEDULED, OrderStatus.PENDING, OrderStatus.PAID}
 
 # Payment limits — MUST mirror src/pages/Checkout.jsx (CASH_MAX / CARD_MAX).
 # If either side changes, update both so KotaBot never quotes a stale limit.
@@ -1406,6 +1406,108 @@ async def get_suggestions(admin_user: User = Depends(get_current_admin_user)):
     except Exception as e:
         logger.error(f"Get suggestions failed: {e}")
         raise HTTPException(500, "Could not load suggestions")
+
+
+@router.get("/recommendations")
+async def get_recommendations(current_user: User = Depends(get_current_user)):
+    """
+    Personalized menu recommendations — "you order X a lot, try Y" — using
+    the same OpenRouter model as KotaBot chat, but pointed at order history
+    instead of a support conversation. Counts against the user's normal
+    chat-credit balance since it's still an LLM call.
+
+    Falls back to a simple non-AI "popular in your favorite category" list
+    if the user has no order history yet, or if the model call fails —
+    recommendations should never just show an error to the customer.
+    """
+    delivered_orders = await Order.find({
+        "user_id": str(current_user.id),
+        "status": "delivered",
+    }).to_list()
+
+    all_menu_items = await MenuItem.find(MenuItem.is_available == True).to_list()  # noqa: E712
+    menu_by_id = {str(m.id): m for m in all_menu_items}
+
+    def _menu_card(m: MenuItem) -> dict:
+        return {"id": str(m.id), "name": m.name, "price": m.price, "image_url": m.image_url, "category": m.category}
+
+    # ── No order history yet — can't personalize, just surface popular items ──
+    if not delivered_orders:
+        fallback = sorted(all_menu_items, key=lambda m: m.name)[:3]
+        return {
+            "message": "New here? These are a few customer favorites to start with.",
+            "items": [_menu_card(m) for m in fallback],
+            "personalized": False,
+        }
+
+    # ── Tally order frequency ──────────────────────────────────────────
+    freq: dict[str, int] = {}
+    for o in delivered_orders:
+        for item in o.items:
+            freq[item.menu_item_id] = freq.get(item.menu_item_id, 0) + item.quantity
+
+    ordered_ids = set(freq.keys())
+    top_items = sorted(
+        ((menu_by_id[mid], count) for mid, count in freq.items() if mid in menu_by_id),
+        key=lambda pair: pair[1], reverse=True,
+    )[:5]
+    candidates = [m for mid, m in menu_by_id.items() if mid not in ordered_ids]
+
+    if not top_items or not candidates or not client:
+        # Nothing to personalize against, or model unavailable — safe fallback
+        fallback = candidates[:3] if candidates else all_menu_items[:3]
+        return {
+            "message": "A few things you haven't tried yet.",
+            "items": [_menu_card(m) for m in fallback],
+            "personalized": False,
+        }
+
+    await credits_service.require_credits(current_user)
+
+    top_summary = ", ".join(f"{m.name} (×{c}, {m.category})" for m, c in top_items)
+    candidate_summary = "\n".join(f"- id={m.id} | {m.name} | R{m.price} | {m.category}" for m in candidates[:30])
+
+    prompt = f"""A KotaBites customer's most-ordered items: {top_summary}
+
+Candidate menu items they HAVEN'T ordered before:
+{candidate_summary}
+
+Pick 2-3 candidates most likely to appeal to them based on their order pattern
+(similar category, complementary flavor, similar price range, etc). Respond
+with ONLY valid JSON, no markdown fences, no preamble:
+{{"message": "one short, friendly sentence like 'You order X a lot — try Y, it's in the same lane'", "item_ids": ["<id1>", "<id2>"]}}"""
+
+    try:
+        resolved_model = _resolve_model(None, current_user)  # use the default free model — recommendations aren't a model-picker feature
+        response = await client.chat.completions.create(
+            model=resolved_model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=200,
+            temperature=0.7,
+        )
+        raw = (response.choices[0].message.content or "").strip()
+        raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
+        parsed = json.loads(raw)
+
+        picked_ids = [i for i in parsed.get("item_ids", []) if i in menu_by_id][:3]
+        if not picked_ids:
+            raise ValueError("model returned no valid item_ids")
+
+        await credits_service.charge_for_tokens(current_user, getattr(response.usage, "completion_tokens", None))
+
+        return {
+            "message": parsed.get("message", "Based on what you usually order, you might like these."),
+            "items": [_menu_card(menu_by_id[i]) for i in picked_ids],
+            "personalized": True,
+        }
+    except Exception as e:
+        logger.warning(f"AI recommendation generation failed, using fallback: {e}")
+        fallback = candidates[:3]
+        return {
+            "message": f"Since you order {top_items[0][0].name} a lot, here's a few in the same spirit.",
+            "items": [_menu_card(m) for m in fallback],
+            "personalized": False,
+        }
 
 
 @router.get("/models")

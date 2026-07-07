@@ -826,6 +826,7 @@ async def get_order_delivery_info(order_id: str, current_user: User = Depends(ge
     driver = await DeliveryDriver.get(assignment.driver_id)
     return {
         "has_driver": True,
+        "assignment_id": str(assignment.id),
         "driver_name": assignment.driver_name,
         "driver_phone": assignment.driver_phone,
         "driver_vehicle": driver.vehicle_type.value if driver else None,
@@ -835,4 +836,6 @@ async def get_order_delivery_info(order_id: str, current_user: User = Depends(ge
         "picked_up_at": assignment.picked_up_at,
         "delivered_at": assignment.delivered_at,
         "actual_time_minutes": assignment.actual_time,
+        "rating": assignment.rating,
+        "rating_comment": assignment.rating_comment,
     }
