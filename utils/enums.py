@@ -1,6 +1,7 @@
 from enum import Enum
 
 class OrderStatus(str, Enum):
+    SCHEDULED = "scheduled"   # placed ahead of time — flips to PENDING when scheduled_for arrives
     PENDING = "pending"
     PAID = "paid"
     PREPARING = "preparing"
