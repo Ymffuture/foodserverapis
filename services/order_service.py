@@ -88,12 +88,13 @@ async def create_order(order_data: OrderCreate, user: User) -> Order:
         user_id=user_id,
         items=items,
         total_amount=total_amount,
-        status=OrderStatus.PENDING,
+        status=OrderStatus.SCHEDULED if order_data.scheduled_for else OrderStatus.PENDING,
         payment_method=payment_method,
         delivery_address=order_data.delivery_address,
         phone=order_data.phone,
         delivery_fee=delivery_fee,
         discount=effective_discount if effective_discount > 0 else None,
+        scheduled_for=order_data.scheduled_for,
         created_at=datetime.utcnow(),
     )
     await order.insert()
