@@ -15,6 +15,7 @@ from models.delivery_assignment import DeliveryAssignment
 from models.reward_code import RewardCode
 from models.webauthn_credential import WebAuthnCredential
 from models.notification import AppNotification
+from models.saved_address import SavedAddress
 
 from routes.appeals import AppealDoc
 from models.social_interaction import SocialInteraction
@@ -44,6 +45,7 @@ async def init_db():
                 AppNotification,
                 AppealDoc,
                 SocialInteraction,
+                SavedAddress,
             ],
         )
 

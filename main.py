@@ -11,6 +11,7 @@ from routes.Users         import router as users_router
 from routes.appeals       import router as appeals_router              # ← NEW
 from routes.billing       import router as billing_router              # ← NEW (ProBite)
 from routes.referrals     import router as referrals_router            # ← NEW (referral program)
+from routes.addresses     import router as addresses_router            # ← NEW (saved addresses)
 # main.py
 from routes.social import router as social_router
 
@@ -18,7 +19,10 @@ from routes.social import router as social_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    from services.scheduler_service import start_scheduler, stop_scheduler
+    start_scheduler()
     yield
+    stop_scheduler()
 
 
 app = FastAPI(
@@ -53,6 +57,7 @@ app.include_router(appeals_router,                               tags=["Appeals"
 app.include_router(social_router, tags=["Social"])
 app.include_router(billing_router, tags=["Billing"])  # ← NEW (ProBite)
 app.include_router(referrals_router, tags=["Referrals"])  # ← NEW (referral program)
+app.include_router(addresses_router, tags=["Addresses"])  # ← NEW (saved addresses)
 
 @app.get("/")
 def home():
