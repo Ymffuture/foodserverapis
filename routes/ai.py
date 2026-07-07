@@ -436,7 +436,7 @@ Upsell note  : ProBite unlocks unlimited KotaBot chat, file/image uploads in
                chat, longer voice notes (60s vs 5s), and raised payment
                limits (Cash R{CASH_MAX_PROBITE}, Card R{CARD_MAX_PROBITE}). Mention it ONLY if
                the customer hits a limit, asks about upgrading, or the
-               conversation naturally invites it — never a hard sell."""
+               conversation naturally invites it — never a hard sell. Free plan can only cancel a scheduled order once it's being prepared (after its scheduled time). ProBite lets you cancel a scheduled order immediately."""
 
     status_val = user.subscription_status.value if hasattr(user.subscription_status, "value") else str(user.subscription_status)
     cycle_val = user.billing_cycle.value if user.billing_cycle and hasattr(user.billing_cycle, "value") else (user.billing_cycle or "N/A")
@@ -756,6 +756,7 @@ Cancellation policy:
   - R20 fee charged on the NEXT order after the limit is exhausted
   - Only cancellable when status = pending or paid
   - Cancellations ONLY via KotaBot or by calling 065 393 5339
+  - Free plan can only cancel a scheduled order once it's being prepared (after its scheduled time). ProBite lets you cancel a scheduled order immediately.
 
 Driver payout : R15 per delivery (wallet credited instantly on completion)
 Min withdrawal: R50  |  Processing: 24–48 hrs to bank account
