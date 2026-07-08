@@ -38,8 +38,8 @@ KIMI_API_KEY = os.getenv("KIMI_API_KEY")
 
 # Named model ids — referenced individually below so task routing reads
 # clearly instead of a wall of string literals.
-LFM_THINKING_MODEL  = "liquid/lfm-2.5-1.2b-thinking:free"
-RERANK_VL_MODEL     = "nvidia/llama-nemotron-rerank-vl-1b-v2:free"
+LFM_THINKING_MODEL  = "poolside/laguna-xs-2.1:free"
+RERANK_VL_MODEL     = "nvidia/nemotron-nano-9b-v2:free"
 NEMOTRON_NANO_MODEL = "nvidia/nemotron-3-nano-30b-a3b:free"
 
 # Free-plan default — used whenever no model was explicitly picked and no
@@ -54,15 +54,15 @@ DEFAULT_MODEL = LFM_THINKING_MODEL
 # gating elsewhere). Keep this list in sync with AVAILABLE_MODELS in
 # src/components/AiChat.jsx.
 AVAILABLE_MODELS: list[dict] = [
-    {"id": LFM_THINKING_MODEL,                                              "label": "LFM 2.5 Thinking",       "description": "Default — chain-of-thought tuned, free plan",   "probite_only": False},
-    {"id": RERANK_VL_MODEL,                                                 "label": "Nemotron Rerank VL",     "description": "NVIDIA — vision-language reranking, free plan","probite_only": False},
+    {"id": LFM_THINKING_MODEL,                                              "label": "Laguna Thinking",       "description": "Default — chain-of-thought tuned, free plan",   "probite_only": False},
+    {"id": RERANK_VL_MODEL,                                                 "label": "Nemotron 3.2",     "description": "NVIDIA — vision-language reranking, free plan","probite_only": False},
     {"id": NEMOTRON_NANO_MODEL,                                             "label": "Nemotron 3 Nano",        "description": "Fast, well-rounded for KotaBot chat",           "probite_only": False},
     {"id": "cohere/north-mini-code:free",                                   "label": "North Mini Code",        "description": "Cohere — lightweight, code-leaning",            "probite_only": True},
-    {"id": "nvidia/nemotron-3.5-content-safety:free",                       "label": "Nemotron Content Safety","description": "NVIDIA — safety-tuned moderation model",        "probite_only": True},
+    {"id": "nvidia/nemotron-3-super-120b-a12b:free",                       "label": "Nemotron 3 Super","description": "NVIDIA — safety-tuned moderation model",        "probite_only": True},
     {"id": "poolside/laguna-m.1:free",                                      "label": "Laguna M.1",             "description": "Poolside — general purpose",                    "probite_only": False},
     {"id": "cognitivecomputations/dolphin-mistral-24b-venice-edition:free", "label": "Dolphin Mistral 24B",    "description": "Uncensored-tuned Mistral fine-tune",            "probite_only": True},
-    {"id": "qwen/qwen3-coder:free",                                         "label": "Qwen3 Coder",            "description": "Alibaba — strong at code",                      "probite_only": True},
-    {"id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",            "label": "Nemotron Omni Reasoning","description": "NVIDIA — multimodal reasoning",                 "probite_only": True},
+    {"id": "nvidia/nemotron-nano-12b-v2-vl:free",                                         "label": "Swiftmeta Coder",            "description": "Alibaba — strong at code",                      "probite_only": True},
+    {"id": "openai/gpt-oss-20b:free",            "label": "GPT Reasoning","description": "GPT — multimodal reasoning",                 "probite_only": True},
 ]
 _ALLOWED_MODEL_IDS = {m["id"] for m in AVAILABLE_MODELS}
 _PROBITE_ONLY_MODEL_IDS = {m["id"] for m in AVAILABLE_MODELS if m["probite_only"]}
