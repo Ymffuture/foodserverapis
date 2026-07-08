@@ -38,15 +38,16 @@ KIMI_API_KEY = os.getenv("KIMI_API_KEY")
 
 # Named model ids — referenced individually below so task routing reads
 # clearly instead of a wall of string literals.
+NEMOTRON_NANO_9B    = "nvidia/nemotron-nano-9b-v2:free"
 LFM_THINKING_MODEL  = "poolside/laguna-xs-2.1:free"
-RERANK_VL_MODEL     = "nvidia/nemotron-nano-9b-v2:free"
 NEMOTRON_NANO_MODEL = "nvidia/nemotron-3-nano-30b-a3b:free"
 
 # Free-plan default — used whenever no model was explicitly picked and no
-# task-specific mapping below applies. LFM 2.5 Thinking is small and
-# chain-of-thought tuned, which makes it a good general-purpose default for
-# free-plan KotaBot chat without needing a ProBite subscription.
-DEFAULT_MODEL = LFM_THINKING_MODEL
+# task-specific mapping below applies. Nemotron Nano 9B v2 is fast, solid
+# at instruction-following, and free-tier, so it's the default AI model
+# across every KotaBot task (chat, recommendations, classification) rather
+# than each task reaching for a different model.
+DEFAULT_MODEL = NEMOTRON_NANO_9B
 
 # Selectable models — all OpenRouter free-tier. id is what's sent to the API,
 # label/description are for the frontend picker. `probite_only` gates a model
@@ -54,33 +55,28 @@ DEFAULT_MODEL = LFM_THINKING_MODEL
 # gating elsewhere). Keep this list in sync with AVAILABLE_MODELS in
 # src/components/AiChat.jsx.
 AVAILABLE_MODELS: list[dict] = [
-    {"id": LFM_THINKING_MODEL,                                              "label": "Laguna Thinking",       "description": "Default — chain-of-thought tuned, free plan",   "probite_only": False},
-    {"id": RERANK_VL_MODEL,                                                 "label": "Nemotron 3.2",     "description": "NVIDIA — vision-language reranking, free plan","probite_only": False},
+    {"id": NEMOTRON_NANO_9B,                                                "label": "Nemotron Nano 9B",       "description": "Default — fast, well-rounded, free plan",       "probite_only": False},
+    {"id": LFM_THINKING_MODEL,                                              "label": "Laguna Thinking",        "description": "Poolside — chain-of-thought tuned, free plan",  "probite_only": False},
     {"id": NEMOTRON_NANO_MODEL,                                             "label": "Nemotron 3 Nano",        "description": "Fast, well-rounded for KotaBot chat",           "probite_only": False},
     {"id": "cohere/north-mini-code:free",                                   "label": "North Mini Code",        "description": "Cohere — lightweight, code-leaning",            "probite_only": True},
-    {"id": "nvidia/nemotron-3-super-120b-a12b:free",                       "label": "Nemotron 3 Super","description": "NVIDIA — safety-tuned moderation model",        "probite_only": True},
+    {"id": "nvidia/nemotron-3-super-120b-a12b:free",                        "label": "Nemotron 3 Super",       "description": "NVIDIA — safety-tuned moderation model",        "probite_only": True},
     {"id": "poolside/laguna-m.1:free",                                      "label": "Laguna M.1",             "description": "Poolside — general purpose",                    "probite_only": False},
     {"id": "cognitivecomputations/dolphin-mistral-24b-venice-edition:free", "label": "Dolphin Mistral 24B",    "description": "Uncensored-tuned Mistral fine-tune",            "probite_only": True},
-    {"id": "nvidia/nemotron-nano-12b-v2-vl:free",                                         "label": "Swiftmeta Coder",            "description": "Alibaba — strong at code",                      "probite_only": True},
-    {"id": "openai/gpt-oss-20b:free",            "label": "GPT Reasoning","description": "GPT — multimodal reasoning",                 "probite_only": True},
+    {"id": "nvidia/nemotron-nano-12b-v2-vl:free",                           "label": "Swiftmeta Coder",        "description": "Alibaba — strong at code",                      "probite_only": True},
+    {"id": "openai/gpt-oss-20b:free",                                       "label": "GPT Reasoning",          "description": "GPT — multimodal reasoning",                    "probite_only": True},
 ]
 _ALLOWED_MODEL_IDS = {m["id"] for m in AVAILABLE_MODELS}
 _PROBITE_ONLY_MODEL_IDS = {m["id"] for m in AVAILABLE_MODELS if m["probite_only"]}
 
 # Per-task default model — used when the frontend/caller didn't explicitly
-# request a model. Lets each internal AI task reach for whichever free-tier
-# model actually suits it, instead of every call sharing one blanket default:
-#   - "chat"           → conversational KotaBot chat (general Q&A, ordering help)
-#   - "recommendation" → picking/ranking best-fit menu items from a candidate
-#                        list — literally what a reranking model is built for
-#   - "classification" → cheap feedback tagging (thinking is disabled at the
-#                        call site anyway, so the small model is plenty)
-# All of these are free-tier (probite_only: False), so free-plan users get
-# task-appropriate routing too, not just ProBite.
+# request a model. All tasks default to Nemotron Nano 9B v2 (the blanket AI
+# default); kept as an explicit map rather than always falling through to
+# DEFAULT_MODEL so a specific task can still be pinned to a different model
+# later without touching every call site.
 TASK_MODEL_MAP: dict[str, str] = {
-    "chat":           LFM_THINKING_MODEL,
-    "recommendation": RERANK_VL_MODEL,
-    "classification": LFM_THINKING_MODEL,
+    "chat":           NEMOTRON_NANO_9B,
+    "recommendation": NEMOTRON_NANO_9B,
+    "classification": NEMOTRON_NANO_9B,
 }
 
 
