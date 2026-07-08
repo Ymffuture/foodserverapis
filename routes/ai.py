@@ -1574,6 +1574,93 @@ with ONLY valid JSON, no markdown fences, no preamble:
         }
 
 
+@router.get("/admin/menu-recommendation")
+async def admin_menu_recommendation(admin: User = Depends(get_current_admin_user)):
+    """
+    Admin-only: ask the AI model to draft a short "today's pick" blurb for
+    a broadcast push notification, based on store-wide order popularity —
+    NOT tied to any single user's history.
+
+    This is deliberately separate from `/recommendations` above: that
+    endpoint personalizes per-customer and silently *skips the AI model
+    call entirely* for anyone with no delivered orders yet (falls back to
+    a generic "customer favorites" line) — which is exactly what happens
+    when it's triggered from an admin account with no order history of its
+    own. That made the admin panel's "AI recommendation" feature look
+    broken even though nothing was erroring. This endpoint always calls
+    the model (unless it's unavailable) and isn't gated on chat credits,
+    since it's an admin broadcast tool, not a per-user chat action.
+    """
+    all_menu_items = await MenuItem.find(MenuItem.is_available == True).to_list()  # noqa: E712
+    if not all_menu_items:
+        raise HTTPException(404, "No available menu items to recommend.")
+
+    def _menu_card(m: MenuItem) -> dict:
+        return {"id": str(m.id), "name": m.name, "price": m.price, "image_url": m.image_url, "category": m.category}
+
+    menu_by_id = {str(m.id): m for m in all_menu_items}
+
+    # Store-wide popularity across ALL delivered orders — not one user's.
+    delivered_orders = await Order.find({"status": "delivered"}).to_list()
+    freq: dict[str, int] = {}
+    for o in delivered_orders:
+        for item in o.items:
+            freq[item.menu_item_id] = freq.get(item.menu_item_id, 0) + item.quantity
+
+    ranked = sorted(
+        ((menu_by_id[mid], count) for mid, count in freq.items() if mid in menu_by_id),
+        key=lambda pair: pair[1], reverse=True,
+    )
+    pool = [m for m, _count in ranked] or all_menu_items
+    top_pool = pool[:8]
+
+    def _fallback(reason: str) -> dict:
+        m = top_pool[0]
+        logger.warning(f"Admin AI menu recommendation fallback ({reason})")
+        return {
+            "title": "Today's Pick For You 🍕",
+            "message": f"Craving something good? {m.name} is a customer favorite — grab it today!",
+            "items": [_menu_card(m)],
+            "ai_generated": False,
+        }
+
+    if not client:
+        return _fallback("no AI client configured")
+
+    candidate_summary = "\n".join(f"- id={m.id} | {m.name} | R{m.price} | {m.category}" for m in top_pool)
+    prompt = f"""You're writing a short push-notification blurb for KotaBites, a food delivery app, to promote ONE menu item to all users today.
+
+Candidate menu items (store-wide popular / available):
+{candidate_summary}
+
+Pick exactly ONE item to feature. Respond with ONLY valid JSON, no markdown fences, no preamble:
+{{"title": "punchy 3-6 word notification title with an emoji", "message": "one short, appetizing sentence recommending it (max 140 chars)", "item_id": "<id>"}}"""
+
+    try:
+        response = await client.chat.completions.create(
+            model=DEFAULT_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=150,
+            temperature=0.8,
+        )
+        raw = (response.choices[0].message.content or "").strip()
+        raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
+        parsed = json.loads(raw)
+
+        item = menu_by_id.get(parsed.get("item_id")) or top_pool[0]
+        title = (parsed.get("title") or "").strip() or "Today's Pick For You 🍕"
+        message = (parsed.get("message") or "").strip() or f"Try {item.name} today!"
+
+        return {
+            "title": title,
+            "message": message,
+            "items": [_menu_card(item)],
+            "ai_generated": True,
+        }
+    except Exception as e:
+        return _fallback(str(e))
+
+
 @router.get("/models")
 async def list_models(current_user: User = Depends(get_current_user)):
     """Selectable OpenRouter models for the chat model picker (all free-tier).
