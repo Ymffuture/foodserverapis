@@ -55,8 +55,13 @@ class SubmitAppealIn(BaseModel):
 
 
 class ReviewAppealIn(BaseModel):
-    decision:   str           = Field(..., pattern="^(approved|rejected)$")
-    admin_note: Optional[str] = Field(None, max_length=500)
+    decision:           str           = Field(..., pattern="^(approved|rejected)$")
+    admin_note:         Optional[str] = Field(None, max_length=500)
+    # Only meaningful when decision == "approved". Defaults to True — an
+    # approved appeal almost always means the restriction should be lifted;
+    # this exists mainly so a future admin UI can approve an appeal purely
+    # as a record without touching the account, if that's ever needed.
+    clear_restrictions: bool          = True
 
 
 def _serialize(a: AppealDoc) -> dict:
@@ -124,13 +129,16 @@ async def get_my_appeal(current_user: User = Depends(get_current_user)):
 
 @router.get("/")
 async def list_appeals(
-    status: Optional[str] = None,           # pending | approved | rejected
-    limit:  int           = 100,
-    admin:  User          = Depends(get_current_admin_user),
+    status:         Optional[str] = None,   # pending | approved | rejected
+    account_status: Optional[str] = None,   # warned | restricted | suspended | banned
+    limit:          int           = 100,
+    admin:          User          = Depends(get_current_admin_user),
 ):
     query = {}
     if status in ("pending", "approved", "rejected"):
         query["status"] = status
+    if account_status in ("warned", "restricted", "suspended", "banned"):
+        query["account_status_at_time"] = account_status
 
     appeals = await AppealDoc.find(query).sort([("created_at", -1)]).limit(limit).to_list()
     return [_serialize(a) for a in appeals]
@@ -154,29 +162,35 @@ async def review_appeal(
     appeal.reviewed_at = datetime.utcnow()
     await appeal.save()
 
-    # If approved — lift suspension or ban
-    if body.decision == "approved":
+    # If approved — clear EVERYTHING on the account, not just whichever
+    # single status this appeal happened to be filed against. A user could
+    # be banned *and* still be carrying old warnings from before that; an
+    # approved appeal means a clean slate, so unban, unsuspend, AND wipe
+    # the warning history together, unconditionally. (Previously this only
+    # cleared the one matching `account_status_at_time`, and silently did
+    # nothing at all for "warned" appeals — both fixed here.)
+    if body.decision == "approved" and body.clear_restrictions:
         user = await User.get(appeal.user_id)
         if user:
-            if appeal.account_status_at_time in ("suspended",):
-                user.is_suspended      = False
-                user.suspension_reason = None
-                user.suspended_until   = None
-                user.suspended_at      = None
-                user.suspended_by      = None
-            elif appeal.account_status_at_time == "banned":
-                user.is_banned     = False
-                user.banned_reason = None
-                user.banned_at     = None
-                user.banned_by     = None
-            elif appeal.account_status_at_time == "restricted":
-                # Clear all warnings on approved restricted appeal
-                user.warnings       = []
-                user.warning_count  = 0
+            user.is_banned         = False
+            user.banned_reason     = None
+            user.banned_at         = None
+            user.banned_by         = None
+
+            user.is_suspended      = False
+            user.suspension_reason = None
+            user.suspended_until   = None
+            user.suspended_at      = None
+            user.suspended_by      = None
+
+            user.warnings          = []
+            user.warning_count     = 0
+
             await user.save()
             logger.info(
                 f"Appeal {appeal_id} approved by {admin.email} — "
-                f"{user.email} status lifted from {appeal.account_status_at_time}"
+                f"ALL restrictions cleared for {user.email} "
+                f"(was {appeal.account_status_at_time})"
             )
 
     logger.info(f"Appeal {appeal_id} {body.decision} by {admin.email}")
