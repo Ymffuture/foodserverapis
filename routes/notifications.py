@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from dependencies import get_current_admin_user, get_current_user
 from models.user import User
 from models.notification import AppNotification, NotificationType, NotificationTarget
+from services.push_service import send_push_to_user, send_push_to_all
 
 router = APIRouter(prefix="/notifications", tags=["Notifications"])
 logger = logging.getLogger(__name__)
@@ -136,6 +137,19 @@ async def create_notification(
         f"→ {body.target.value}"
         + (f" → user {body.target_user_id}" if body.target_user_id else "")
     )
+
+    # Also fire a real browser push (Push API) so subscribed users get a
+    # native OS notification even when KotaBites isn't open in a tab —
+    # the in-app inbox above only shows up while/when they're in the app.
+    # Best-effort: a push failure should never fail the notification create.
+    try:
+        if body.target == NotificationTarget.SPECIFIC and body.target_user_id:
+            await send_push_to_user(body.target_user_id, body.title, body.message, url="/")
+        else:
+            await send_push_to_all(body.title, body.message, url="/")
+    except Exception as exc:
+        logger.warning(f"Push dispatch failed for notification '{body.title}': {exc}")
+
     return {"success": True, "message": "Notification sent", "notification": _serialize(notif)}
 
 
