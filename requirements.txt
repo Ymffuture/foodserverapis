@@ -17,3 +17,4 @@ webauthn==2.1.0
 cbor2==5.6.4
 google-genai>=0.3.0
 APScheduler==3.10.4
+pywebpush==2.0.3

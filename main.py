@@ -12,6 +12,7 @@ from routes.appeals       import router as appeals_router              # ← NEW
 from routes.billing       import router as billing_router              # ← NEW (ProBite)
 from routes.referrals     import router as referrals_router            # ← NEW (referral program)
 from routes.addresses     import router as addresses_router            # ← NEW (saved addresses)
+from routes.push          import router as push_router                 # ← NEW (web push)
 # main.py
 from routes.social import router as social_router
 
@@ -58,6 +59,7 @@ app.include_router(social_router, tags=["Social"])
 app.include_router(billing_router, tags=["Billing"])  # ← NEW (ProBite)
 app.include_router(referrals_router, tags=["Referrals"])  # ← NEW (referral program)
 app.include_router(addresses_router, tags=["Addresses"])  # ← NEW (saved addresses)
+app.include_router(push_router, tags=["Push Notifications"])  # ← NEW (web push)
 
 @app.get("/")
 def home():

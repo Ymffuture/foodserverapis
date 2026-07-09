@@ -32,6 +32,17 @@ CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET")
 GITHUB_CLIENT_ID     = os.getenv("GITHUB_CLIENT_ID")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
 
+# ── Web Push (VAPID) ─────────────────────────────────────────────────────────
+# Generated once with `cryptography` — an EC P-256 keypair, base64url-encoded
+# (no padding), which is exactly what the Web Push protocol expects. Keep
+# VAPID_PRIVATE_KEY secret; VAPID_PUBLIC_KEY is safe to ship to the frontend
+# (it's what applicationServerKey in pushManager.subscribe() uses).
+# Regenerate your own pair for production rather than reusing this one:
+#   see services/push_service.py docstring for the one-off script.
+VAPID_PUBLIC_KEY  = os.getenv("VAPID_PUBLIC_KEY",  "BA0N1B0LdoqINPCs0K8lDSYSrtbTFpMHOWt-oIoTNJErYGLJcO7hhKpEmKEreNXVE4JzCZEtNYes_oWp8aONWS8")
+VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "tSjmuH497a49k0lblqlUE1r6DGoeUiyTu28hwUj-V6o")
+VAPID_CLAIM_EMAIL  = os.getenv("VAPID_CLAIM_EMAIL", "mailto:support@kotabites.app")
+
 # Spotify OAuth
 SPOTIFY_CLIENT_ID     = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")

@@ -16,6 +16,7 @@ from models.reward_code import RewardCode
 from models.webauthn_credential import WebAuthnCredential
 from models.notification import AppNotification
 from models.saved_address import SavedAddress
+from models.push_subscription import PushSubscription
 
 from routes.appeals import AppealDoc
 from models.social_interaction import SocialInteraction
@@ -46,6 +47,7 @@ async def init_db():
                 AppealDoc,
                 SocialInteraction,
                 SavedAddress,
+                PushSubscription,
             ],
         )
 
