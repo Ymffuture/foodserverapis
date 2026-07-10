@@ -25,8 +25,8 @@ router = APIRouter()
 
 RESET_EXPIRY_MINUTES = 30
 RATE_LIMIT_SECONDS   = 60
-OTP_EXPIRY_MINUTES   = 10
-OTP_MAX_ATTEMPTS     = 5
+OTP_EXPIRY_MINUTES   = 5
+OTP_MAX_ATTEMPTS     = 3
 
 # Simple in-memory rate-limit stores (resets on server restart — fine for most use-cases)
 _reset_rate:  dict[str, datetime] = {}
