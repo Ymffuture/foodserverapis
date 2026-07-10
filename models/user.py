@@ -56,6 +56,12 @@ class User(Document):
     # Password reset
     reset_token:         Optional[str] = None
     reset_token_expires: Optional[datetime] = None
+    # Login OTP — a 6-digit code required after a correct password before a
+    # session token is issued. Same "backend generates it, frontend emails it
+    # via EmailJS" pattern as verification_token/reset_token above.
+    login_otp_code:        Optional[str] = None
+    login_otp_expires:     Optional[datetime] = None
+    login_otp_attempts:    int = 0
     # Admin
     is_admin: bool = False
     # ── Account moderation ─────────────────────────────────────────────
