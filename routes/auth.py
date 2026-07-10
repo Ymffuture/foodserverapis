@@ -25,10 +25,13 @@ router = APIRouter()
 
 RESET_EXPIRY_MINUTES = 30
 RATE_LIMIT_SECONDS   = 60
+OTP_EXPIRY_MINUTES   = 10
+OTP_MAX_ATTEMPTS     = 5
 
 # Simple in-memory rate-limit stores (resets on server restart — fine for most use-cases)
 _reset_rate:  dict[str, datetime] = {}
 _verify_rate: dict[str, datetime] = {}
+_otp_rate:    dict[str, datetime] = {}
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────────
@@ -73,6 +76,21 @@ class ResetBody(BaseModel):
 class VerifyBody(BaseModel):
     token: str
 
+class OtpRequiredResponse(BaseModel):
+    otp_required: bool = True
+    email: str
+    full_name: str
+    otp_code: str        # returned so the frontend can email it via EmailJS —
+                          # same pattern as forgot-password/verify-email above
+    expires_in: int       # minutes
+
+class VerifyOtpBody(BaseModel):
+    email: EmailStr
+    otp: str
+
+class ResendOtpBody(BaseModel):
+    email: EmailStr
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -81,6 +99,15 @@ def _check_rate(store: dict, key: str) -> None:
     if key in store and (now - store[key]).total_seconds() < RATE_LIMIT_SECONDS:
         raise HTTPException(429, "Please wait a moment before trying again.")
     store[key] = now
+
+
+def _generate_login_otp(user: User) -> str:
+    """Generate + persist a fresh 6-digit login OTP on the user, replacing any previous one."""
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    user.login_otp_code     = code
+    user.login_otp_expires  = datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)
+    user.login_otp_attempts = 0
+    return code
 
 
 def _oauth_response(user: User) -> dict:
@@ -130,8 +157,15 @@ async def register(user: UserCreate):
     }
 
 
-@router.post("/login", response_model=LoginResponse)
+@router.post("/login", response_model=OtpRequiredResponse)
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    """
+    Step 1 of email login: verify email + password, then issue a 6-digit
+    OTP instead of a session token directly. The frontend emails this code
+    to the user via EmailJS (same pattern as password-reset/verify-email —
+    this backend never sends email itself) and the user enters it at
+    POST /auth/login/verify-otp to actually get a token.
+    """
     user = await User.find_one(User.email == form_data.username)
 
     if not user or not user.hashed_password or not verify_password(form_data.password, user.hashed_password):
@@ -143,14 +177,79 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
             detail="Please verify your email before logging in. Check your inbox for the verification link."
         )
 
+    _check_rate(_otp_rate, user.email)
+    code = _generate_login_otp(user)
+    await user.save()
+
+    logger.info(f"Login OTP issued for {user.email}")
     return {
-        "access_token": create_access_token({"sub": user.email}),
-        "token_type":   "bearer",
-        "id":             str(user.id),
+        "otp_required": True,
         "email":        user.email,
         "full_name":    user.full_name,
+        "otp_code":     code,
+        "expires_in":   OTP_EXPIRY_MINUTES,
+    }
+
+
+@router.post("/login/verify-otp", response_model=LoginResponse)
+async def verify_login_otp(body: VerifyOtpBody):
+    """Step 2 of email login: exchange a valid OTP for an actual session token."""
+    user = await User.find_one(User.email == body.email)
+    if not user or not user.login_otp_code:
+        raise HTTPException(400, "No login code pending for this account — please sign in again.")
+
+    if not user.login_otp_expires or datetime.utcnow() > user.login_otp_expires:
+        user.login_otp_code = None
+        await user.save()
+        raise HTTPException(400, "This code has expired — please request a new one.")
+
+    if user.login_otp_attempts >= OTP_MAX_ATTEMPTS:
+        user.login_otp_code = None
+        await user.save()
+        raise HTTPException(429, "Too many incorrect attempts — please request a new code.")
+
+    if body.otp.strip() != user.login_otp_code:
+        user.login_otp_attempts += 1
+        await user.save()
+        remaining = OTP_MAX_ATTEMPTS - user.login_otp_attempts
+        raise HTTPException(400, f"Incorrect code — {remaining} attempt(s) left.")
+
+    # Success — burn the OTP, issue the real session token
+    user.login_otp_code     = None
+    user.login_otp_expires  = None
+    user.login_otp_attempts = 0
+    await user.save()
+
+    return {
+        "access_token":   create_access_token({"sub": user.email}),
+        "token_type":     "bearer",
+        "id":             str(user.id),
+        "email":          user.email,
+        "full_name":      user.full_name,
         "email_verified": user.email_verified,
-        "picture":      user.picture,
+        "picture":        user.picture,
+    }
+
+
+@router.post("/login/resend-otp", response_model=OtpRequiredResponse)
+async def resend_login_otp(body: ResendOtpBody):
+    """Issue a fresh OTP, invalidating the previous one — rate-limited same as the initial /login issue."""
+    user = await User.find_one(User.email == body.email)
+    if not user:
+        # Don't leak account existence — but keep the same response shape.
+        raise HTTPException(400, "Could not resend code — please sign in again.")
+
+    _check_rate(_otp_rate, user.email)
+    code = _generate_login_otp(user)
+    await user.save()
+
+    logger.info(f"Login OTP resent for {user.email}")
+    return {
+        "otp_required": True,
+        "email":        user.email,
+        "full_name":    user.full_name,
+        "otp_code":     code,
+        "expires_in":   OTP_EXPIRY_MINUTES,
     }
 
 
